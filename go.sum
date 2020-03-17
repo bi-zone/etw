@@ -1,0 +1,6 @@
+github.com/beevik/guid v0.0.0-20170504223318-d0ea8faecee0 h1:oLd/YLOTOgA4D4aAUhIE8vhl/LAP1ZJrj0mDQpl7GB8=
+github.com/beevik/guid v0.0.0-20170504223318-d0ea8faecee0/go.mod h1:XzXWuOd1wJ63MtICHh5+PnvCuxsB/d58T8TswEhI/9I=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+golang.org/x/sys v0.0.0-20200302150141-5c8b2ff67527 h1:uYVVQ9WP/Ds2ROhcaGPeIdVq0RIXVLwsHlnvJ+cT1So=
+golang.org/x/sys v0.0.0-20200302150141-5c8b2ff67527/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
