@@ -1,4 +1,5 @@
 #include "session.h"
+#include "_cgo_export.h"
 
 ULONG CreateSession(TRACEHANDLE* hSession, char* sessionName) {
     PEVENT_TRACE_PROPERTIES pSessionProperties = NULL;
@@ -25,3 +26,64 @@ ULONG CreateSession(TRACEHANDLE* hSession, char* sessionName) {
 
     return StartTrace(hSession, sessionName, pSessionProperties);
 };
+
+ULONG StartSession(char* sessionName, PVOID context) {
+    ULONG status = ERROR_SUCCESS;
+    EVENT_TRACE_LOGFILE trace;
+    TRACEHANDLE hTrace = 0;
+
+    // подключение к сессии
+
+    ZeroMemory(&trace, sizeof(EVENT_TRACE_LOGFILE));
+    trace.LogFileName = NULL;
+    trace.LoggerName = sessionName;
+    trace.CurrentTime = 0;
+    trace.BuffersRead = 0;
+    trace.BufferSize = 0;
+    trace.Filled = 0;
+    trace.EventsLost = 0;
+    trace.Context = context;
+    trace.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
+    trace.EventRecordCallback = (PEVENT_RECORD_CALLBACK)(handleEvent);
+
+    hTrace = OpenTrace(&trace);
+
+    if (INVALID_PROCESSTRACE_HANDLE == hTrace) {
+        return GetLastError();
+    }
+
+    status = ProcessTrace(&hTrace, 1, 0, 0);
+    if (status != ERROR_SUCCESS && status != ERROR_CANCELLED) {
+        return status;
+    }
+}
+/*
+TRACE_EVENT_INFO* GetEventInformation(EVENT_RECORD* pEvent) {
+    PTRACE_EVENT_INFO pInfo;
+    DWORD status = ERROR_SUCCESS;
+    DWORD BufferSize = 0;
+
+    // Retrieve the required buffer size for the event metadata.
+
+    status = TdhGetEventInformation(pEvent, 0, NULL, pInfo, &BufferSize);
+
+    if (ERROR_INSUFFICIENT_BUFFER == status)
+    {
+        pInfo = (TRACE_EVENT_INFO*) malloc(BufferSize);
+        if (pInfo == NULL)
+        {
+            wprintf(L"Failed to allocate memory for event info (size=%lu).\n", BufferSize);
+            return NULL;
+        }
+
+        // Retrieve the event metadata.
+
+        status = TdhGetEventInformation(pEvent, 0, NULL, pInfo, &BufferSize);
+    }
+
+    if (ERROR_SUCCESS != status)
+    {
+        return NULL
+    }
+}
+*/

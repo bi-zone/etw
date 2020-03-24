@@ -1,36 +1,35 @@
 package tracing_session
 
 /*
-
+#cgo LDFLAGS: -ggdb -ltdh
 #include "session.h"
 */
 import "C"
 import (
+	"fmt"
 	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/sys/windows"
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"math/rand"
 )
 
 var (
 	api32 = windows.NewLazySystemDLL("Advapi32.dll")
 )
 
+var sessions sync.Map
+
 var procEnableTraceEx2 = api32.NewProc("EnableTraceEx2")
 
 const EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1
 const TRACE_LEVEL_VERBOSE = 5
 
-func CreateSession(sessionName string) error { return nil }
-
-func SubscribeSessionToProvider(sessionName string, providerGUID []byte) error { return nil }
-
-func StartSession() error { return nil }
-
-func StopSession() error { return nil }
-
 type Session struct {
-	hSession* C.TRACEHANDLE
+	hSession *C.TRACEHANDLE
 	Name     string
 }
 
@@ -64,25 +63,82 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 
 type EventCallback func(event C.PEVENT_RECORD)
 
-func HandleEvent(event C.PEVENT_RECORD) {
-	spew.Dump(event)
+//export handleEvent
+func handleEvent(event C.PEVENT_RECORD) {
+	parseEvent(event)
+	key := int(uintptr(event.UserContext))
+	targetSession, _  := sessions.Load(key)
+	s := targetSession.(*Session)
+	fmt.Println(s.Name)
 }
 
-func (s *Session) StartSession() error {
-	var trace C.EVENT_TRACE_LOGFILE
-	trace.LogFileName = nil
-	trace.LoggerName = C.CString(s.Name);
-	trace.CurrentTime = 0
-	trace.BuffersRead = 0
-	trace.BufferSize = 0
-	trace.Filled = 0
-	trace.EventsLost = 0
-	trace.Context = nil
-	trace.LogFileMode = C.PROCESS_TRACE_MODE_REAL_TIME | C.PROCESS_TRACE_MODE_EVENT_RECORD
-	trace.EventCallback = HandleEvent
-	spew.Dump(trace)
+// Go-analog of EVENT_RECORD structure.
+// https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 
-	//hTrace := C.OpenTrace(&trace)
-	//spew.Dump(hTrace)
+type Event struct {
+	EventHeader EventHeader
+	Properties map[string]interface{}
+}
+
+type EventHeader struct {
+	Size uint16
+	HeaderType uint16
+	Flags uint16
+	EventProperty uint16
+	ThreadId uint32
+	ProcessId uint32
+	TimeStamp time.Time
+	EventDescriptor EventDescriptor
+	GUID windows.GUID
+	ActivityId windows.GUID
+}
+
+type EventDescriptor struct {
+	Id uint16
+	Version uint8
+	Channel uint8
+	Level uint8
+	OpCode uint8
+	Task uint16
+	Keyword  uint64
+}
+
+// https://docs.microsoft.com/ru-ru/windows/win32/etw/using-tdhformatproperty-to-consume-event-data
+// https://github.com/microsoft/perfview/blob/master/src/TraceEvent/TraceEvent.cs
+// https://docs.microsoft.com/en-us/windows/win32/etw/retrieving-event-metadata
+func parseEvent(event C.PEVENT_RECORD) Event{
+	traceEventInfo, _ := getEventInformation(event)
+	spew.Dump(traceEventInfo)
+	return Event{}
+}
+
+func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
+	var eventInfo C.PTRACE_EVENT_INFO
+	var bufferSize C.int
+
+	// get structure size
+	status := C.TdhGetEventInformation(pEvent, 0, nil, &eventInfo, &bufferSize)
+
+	if C.ERROR_INSUFFICIENT_BUFFER == status {
+		pInfo := C.TRACE_EVENT_INFO*(C.malloc(bufferSize))
+		if pInfo == 0  {
+			return nil, fmt.Errorf("failed to allocate memory for event info (size=%v)", bufferSize)
+		}
+
+		status = C.TdhGetEventInformation(pEvent, 0, nil, &eventInfo, &bufferSize)
+	}
+	if C.ERROR_SUCCESS != status {
+		return nil, fmt.Errorf("TdhGetEventInformation failed with %v", status)
+	}
+	return eventInfo, nil
+}
+
+
+
+func (s *Session) StartSession() error {
+	key := rand.Int()
+	sessions.Store(key, s)
+	status := C.StartSession(C.CString(s.Name), C.PVOID(uintptr(key)))
+	spew.Dump(status)
 	return nil
 }
