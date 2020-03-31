@@ -12,9 +12,6 @@ ULONG CreateSession(TRACEHANDLE* hSession, char* sessionName) {
         return 132;
     }
 
-    // if(!SetPrivilege(hToken, SE_SECURITY_NAME, TRUE)) goto cleanup;
-
-    // создание сессии
     const size_t buffSize = sizeof(EVENT_TRACE_PROPERTIES) + strlen(sessionName) + 1;
     pSessionProperties = malloc(buffSize);
     ZeroMemory(pSessionProperties, buffSize);
@@ -31,8 +28,6 @@ ULONG StartSession(char* sessionName, PVOID context) {
     ULONG status = ERROR_SUCCESS;
     EVENT_TRACE_LOGFILE trace;
     TRACEHANDLE hTrace = 0;
-
-    // подключение к сессии
 
     ZeroMemory(&trace, sizeof(EVENT_TRACE_LOGFILE));
     trace.LogFileName = NULL;
@@ -57,33 +52,24 @@ ULONG StartSession(char* sessionName, PVOID context) {
         return status;
     }
 }
-/*
-TRACE_EVENT_INFO* GetEventInformation(EVENT_RECORD* pEvent) {
-    PTRACE_EVENT_INFO pInfo;
-    DWORD status = ERROR_SUCCESS;
-    DWORD BufferSize = 0;
 
-    // Retrieve the required buffer size for the event metadata.
-
-    status = TdhGetEventInformation(pEvent, 0, NULL, pInfo, &BufferSize);
-
-    if (ERROR_INSUFFICIENT_BUFFER == status)
-    {
-        pInfo = (TRACE_EVENT_INFO*) malloc(BufferSize);
-        if (pInfo == NULL)
-        {
-            wprintf(L"Failed to allocate memory for event info (size=%lu).\n", BufferSize);
-            return NULL;
-        }
-
-        // Retrieve the event metadata.
-
-        status = TdhGetEventInformation(pEvent, 0, NULL, pInfo, &BufferSize);
-    }
-
-    if (ERROR_SUCCESS != status)
-    {
-        return NULL
-    }
+ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
+    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
-*/
+
+ULONG GetPropertyCount(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].count;
+}
+
+USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].nonStructType.InType;
+}
+
+USHORT GetOutType(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].nonStructType.OutType;
+}
+
+
+ULONG GetMapName(PTRACE_EVENT_INFO info, int i) {
+    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].nonStructType.MapNameOffset);
+}

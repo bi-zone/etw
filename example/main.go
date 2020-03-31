@@ -15,4 +15,3 @@ func main() {
 	}
 	spew.Dump(session.StartSession())
 }
-
