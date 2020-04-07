@@ -28,17 +28,25 @@ var sessions sync.Map
 type Session struct {
 	hSession *C.TRACEHANDLE
 	Name     string
+
+	errChan   chan error
+	eventChan chan *Event
 }
 
 // NewSession creates windows trace session instance.
 func NewSession(sessionName string) (Session, error) {
 	var hSession C.TRACEHANDLE
 	status := C.CreateSession(&hSession, C.CString(sessionName))
-	spew.Dump(status)
+	if status != 0 {
+		return Session{}, fmt.Errorf("failed to create session with %v", status)
+	}
 
 	return Session{
 		hSession: &hSession,
 		Name:     sessionName,
+
+		errChan:        make(chan error),
+		eventChan:      make(chan *Event),
 	}, nil
 }
 
@@ -61,31 +69,46 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 }
 
 // StartSession starts event consuming from session.
+// N.B. Blocking!
 func (s *Session) StartSession() error {
 	key := rand.Int()
 	sessions.Store(key, s)
 	status := C.StartSession(C.CString(s.Name), C.PVOID(uintptr(key)))
-	spew.Dump(status)
+	if status != 0 {
+		return fmt.Errorf("failed start session with %v", status)
+	}
 	return nil
 }
 
 func (s *Session) StopSession() error { return nil }
 
+func (s *Session) Error() chan error {
+	return s.errChan
+}
+
+func (s *Session) Event() chan *Event {
+	return s.eventChan
+}
+
 //export handleEvent
-func handleEvent(event C.PEVENT_RECORD) {
-	parseEvent(event)
-	key := int(uintptr(event.UserContext))
+func handleEvent(eventRecord C.PEVENT_RECORD) {
+	key := int(uintptr(eventRecord.UserContext))
 	targetSession, _ := sessions.Load(key)
 	s := targetSession.(*Session)
-	fmt.Println("Session Name", s.Name)
+
+	event, err := parseEvent(eventRecord)
+	if err != nil {
+		s.errChan <- err
+	} else {
+		s.eventChan <- event
+	}
 }
 
 
 var (
 	tdh = windows.NewLazySystemDLL("Tdh.dll")
+	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
 )
-
-var tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
 
 
 // Go-analog of EVENT_RECORD structure.
@@ -121,92 +144,112 @@ type EventDescriptor struct {
 // https://docs.microsoft.com/ru-ru/windows/win32/etw/using-tdhformatproperty-to-consume-event-data
 // https://github.com/microsoft/perfview/blob/master/src/TraceEvent/TraceEvent.cs
 // https://docs.microsoft.com/en-us/windows/win32/etw/retrieving-event-metadata
-func parseEvent(event C.PEVENT_RECORD) Event {
-	pInfo, err := getEventInformation(event)
+func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
+	var event Event
+	if eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
+		event.Properties[""] = C.GoString((*C.char)(eventRecord.UserData))
+		return &event, nil
+	}
+
+	pInfo, err := getEventInformation(eventRecord)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to get event information witn %s", err)
 	}
-	if event.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
-		fmt.Printf("%s\n", C.GoString((*C.char)(event.UserData)))
-	} else {
-		fmt.Printf("============%v===============\n", event.EventHeader.EventDescriptor.Id)
 
-		pUserData := uintptr(event.UserData)
-		pEndOfData := pUserData + uintptr(event.UserDataLength)
+	event.EventHeader.EventDescriptor.Id = uint16(eventRecord.EventHeader.EventDescriptor.Id)
 
-		for i := 0; i < int(pInfo.TopLevelPropertyCount); i++ {
-			name := getPropertyName(pInfo, i)
-			value, err := getProperty(event, pInfo, i)
-			if err != nil {
-				spew.Dump(err)
-				continue
-			}
-			fmt.Println("User Data:", pUserData)
-			value1, consumed := parseEventSecondWay(event, pInfo, i, pUserData, pEndOfData)
-			pUserData += consumed
-			fmt.Println("Consumed:", consumed)
+	parser := newEventParser(
+		eventRecord,
+		pInfo,
+		uintptr(eventRecord.UserData),
+		uintptr(eventRecord.UserData) + uintptr(eventRecord.UserDataLength))
 
-			fmt.Printf("%s: %v %s\n", name, value, value1)
+	event.Properties = make(map[string]interface{}, int(pInfo.TopLevelPropertyCount))
+
+	for i := 0; i < int(pInfo.TopLevelPropertyCount); i++ {
+		name := getPropertyName(pInfo, i)
+		value, err := parser.Parse(i)
+		if err != nil {
+			spew.Dump(err) // TODO make error channel
+			continue
 		}
+
+		event.Properties[name] = value
 	}
-	return Event{}
+
+	return &event, nil
 }
 
-func parseEventSecondWay(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int, UserData uintptr, endUserData uintptr) (string, uintptr) {
-	mapInfo, err := getMapInfo(event, info, index)
+type eventParser struct {
+	record C.PEVENT_RECORD
+	info C.PTRACE_EVENT_INFO
+	data uintptr
+	endData uintptr
+}
+
+func newEventParser(r C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, data uintptr, endData uintptr) *eventParser {
+	return &eventParser{
+		record: r,
+		info: info,
+		data: data,
+		endData: endData,
+	}
+}
+
+func (p* eventParser) Parse(i int) (string, error) {
+	mapInfo, err := getMapInfo(p.record, p.info, i)
 	fmt.Println(mapInfo, err)
 
 	var propertyLength C.int
-	status := C.GetPropertyLength(event, info, C.int(index), &propertyLength)
+	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
 
 	if status != 0 {
-		fmt.Println("Failed to get property length", status)
-		return "", uintptr(0)
+		return "", fmt.Errorf("failed to get property length with %v", status)
 	}
 
 	var formattedDataSize C.int
 	var userDataConsumed C.int
 
 	_, _, _ = tdhFormatProperty.Call(
-		uintptr(unsafe.Pointer(info)),
+		uintptr(unsafe.Pointer(p.record)),
 		0,
 		uintptr(8),
-		uintptr(C.GetInType(info, C.int(index))),
-		uintptr(C.GetOutType(info, C.int(index))),
+		uintptr(C.GetInType(p.info, C.int(i))),
+		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
-		endUserData - UserData,
-		uintptr(UserData),
+		p.endData - p.data,
+		uintptr(p.data),
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		0,
 		uintptr(unsafe.Pointer(&userDataConsumed)),
-		)
+	)
 
 	if int(formattedDataSize) == 0 {
-		return "", uintptr(0)
+		return "",  nil
 	}
 
 	formattedData := make([]byte, int(formattedDataSize))
 
 	_, _, _ = tdhFormatProperty.Call(
-		uintptr(unsafe.Pointer(info)),
+		uintptr(unsafe.Pointer(p.info)),
 		0,
 		uintptr(8),
-		uintptr(C.GetInType(info, C.int(index))),
-		uintptr(C.GetOutType(info, C.int(index))),
+		uintptr(C.GetInType(p.info, C.int(i))),
+		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
-		endUserData - UserData,
-		uintptr(UserData),
+		p.endData - p.data,
+		uintptr(p.data),
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		uintptr(unsafe.Pointer(&formattedData[0])),
 		uintptr(unsafe.Pointer(&userDataConsumed)),
 	)
 
-	return string(formattedData), uintptr(userDataConsumed)
+	p.data += uintptr(userDataConsumed)
+
+	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(userDataConsumed)), nil
 }
 
 func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error){
-	fmt.Println("getting map info...")
-	defer fmt.Println("getting map info finished")
 	var mapSize C.ulong
 
 	mapName := C.GetMapName(info, C.int(index))

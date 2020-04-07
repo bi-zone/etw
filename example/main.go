@@ -13,5 +13,19 @@ func main() {
 	if err := session.SubscribeToProvider("{1418EF04-B0B4-4623-BF7E-D74AB47BBDAA}"); err != nil {
 		panic(err)
 	}
-	spew.Dump(session.StartSession())
+	go func() {
+		err = session.StartSession()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	for {
+		select{
+			case e := <- session.Event():
+				spew.Dump(e)
+			case err = <- session.Error():
+				panic(err)
+		}
+	}
 }
