@@ -46,7 +46,7 @@ func NewSession(sessionName string) (Session, error) {
 func (s *Session) SubscribeToProvider(providerGUID string) error {
 	guid, err := windows.GUIDFromString(providerGUID)
 	if err != nil {
-		return fmt.Errorf("failed to parse GUID from string", err)
+		return fmt.Errorf("failed to parse GUID from string %s", err)
 	}
 	C.EnableTraceEx2(
 		*s.hSession,
@@ -77,8 +77,16 @@ func handleEvent(event C.PEVENT_RECORD) {
 	key := int(uintptr(event.UserContext))
 	targetSession, _ := sessions.Load(key)
 	s := targetSession.(*Session)
-	fmt.Println(s.Name)
+	fmt.Println("Session Name", s.Name)
 }
+
+
+var (
+	tdh = windows.NewLazySystemDLL("Tdh.dll")
+)
+
+var tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
+
 
 // Go-analog of EVENT_RECORD structure.
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
@@ -121,7 +129,11 @@ func parseEvent(event C.PEVENT_RECORD) Event {
 	if event.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
 		fmt.Printf("%s\n", C.GoString((*C.char)(event.UserData)))
 	} else {
-		fmt.Println("============================")
+		fmt.Printf("============%v===============\n", event.EventHeader.EventDescriptor.Id)
+
+		pUserData := uintptr(event.UserData)
+		pEndOfData := pUserData + uintptr(event.UserDataLength)
+
 		for i := 0; i < int(pInfo.TopLevelPropertyCount); i++ {
 			name := getPropertyName(pInfo, i)
 			value, err := getProperty(event, pInfo, i)
@@ -129,10 +141,98 @@ func parseEvent(event C.PEVENT_RECORD) Event {
 				spew.Dump(err)
 				continue
 			}
-			fmt.Printf("%s: %v\n", name, value)
+			fmt.Println("User Data:", pUserData)
+			value1, consumed := parseEventSecondWay(event, pInfo, i, pUserData, pEndOfData)
+			pUserData += consumed
+			fmt.Println("Consumed:", consumed)
+
+			fmt.Printf("%s: %v %s\n", name, value, value1)
 		}
 	}
 	return Event{}
+}
+
+func parseEventSecondWay(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int, UserData uintptr, endUserData uintptr) (string, uintptr) {
+	mapInfo, err := getMapInfo(event, info, index)
+	fmt.Println(mapInfo, err)
+
+	var propertyLength C.int
+	status := C.GetPropertyLength(event, info, C.int(index), &propertyLength)
+
+	if status != 0 {
+		fmt.Println("Failed to get property length", status)
+		return "", uintptr(0)
+	}
+
+	var formattedDataSize C.int
+	var userDataConsumed C.int
+
+	_, _, _ = tdhFormatProperty.Call(
+		uintptr(unsafe.Pointer(info)),
+		0,
+		uintptr(8),
+		uintptr(C.GetInType(info, C.int(index))),
+		uintptr(C.GetOutType(info, C.int(index))),
+		uintptr(propertyLength),
+		endUserData - UserData,
+		uintptr(UserData),
+		uintptr(unsafe.Pointer(&formattedDataSize)),
+		0,
+		uintptr(unsafe.Pointer(&userDataConsumed)),
+		)
+
+	if int(formattedDataSize) == 0 {
+		return "", uintptr(0)
+	}
+
+	formattedData := make([]byte, int(formattedDataSize))
+
+	_, _, _ = tdhFormatProperty.Call(
+		uintptr(unsafe.Pointer(info)),
+		0,
+		uintptr(8),
+		uintptr(C.GetInType(info, C.int(index))),
+		uintptr(C.GetOutType(info, C.int(index))),
+		uintptr(propertyLength),
+		endUserData - UserData,
+		uintptr(UserData),
+		uintptr(unsafe.Pointer(&formattedDataSize)),
+		uintptr(unsafe.Pointer(&formattedData[0])),
+		uintptr(unsafe.Pointer(&userDataConsumed)),
+	)
+
+	return string(formattedData), uintptr(userDataConsumed)
+}
+
+func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error){
+	fmt.Println("getting map info...")
+	defer fmt.Println("getting map info finished")
+	var mapSize C.ulong
+
+	mapName := C.GetMapName(info, C.int(index))
+
+	status := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
+
+	if status == 1168 {
+		return nil, nil
+	}
+
+	if status != 122 {
+		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
+	}
+
+	fmt.Println("SOMETHING IN MAPINFO!!!", status)
+
+	mapInfo := make([]byte, int(mapSize))
+	status = C.TdhGetEventMapInformation(
+		event,
+		C.GetMapName(info, C.int(index)),
+		(C.PEVENT_MAP_INFO)(unsafe.Pointer(&mapInfo[0])),
+		&mapSize)
+	if status != 0 {
+		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
+	}
+	return mapInfo, nil
 }
 
 func getProperty(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (interface{}, error) {
@@ -147,6 +247,8 @@ func getProperty(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (in
 	var propertySize C.ulong
 
 	status := C.TdhGetPropertySize(event, 0, nil, 1, &DataDescriptor, &propertySize)
+
+	fmt.Println("Actual length", propertySize)
 
 	if status != 0 {
 		return nil, fmt.Errorf("failed to get property size")

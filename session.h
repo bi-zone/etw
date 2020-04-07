@@ -18,3 +18,9 @@ ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info, int index);
 ULONG GetPropertyCount(PTRACE_EVENT_INFO info, int index);
 USHORT GetInType(PTRACE_EVENT_INFO info, int index);
 USHORT GetOutType(PTRACE_EVENT_INFO info, int index);
+
+LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i);
+ULONG GetPropertyFlags(PTRACE_EVENT_INFO info, int i);
+
+DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength);
+DWORD GetMapInfo(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO info, int i, PEVENT_MAP_INFO pMapInfo);
