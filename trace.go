@@ -8,6 +8,7 @@ package tracing_session
 
 #include "session.h"
 
+
 */
 import "C"
 import (
@@ -26,8 +27,9 @@ import (
 var sessions sync.Map
 
 type Session struct {
-	hSession *C.TRACEHANDLE
-	Name     string
+	hSession   C.TRACEHANDLE
+	properties C.PEVENT_TRACE_PROPERTIES
+	Name       string
 
 	errChan   chan error
 	eventChan chan *Event
@@ -36,17 +38,21 @@ type Session struct {
 // NewSession creates windows trace session instance.
 func NewSession(sessionName string) (Session, error) {
 	var hSession C.TRACEHANDLE
-	status := C.CreateSession(&hSession, C.CString(sessionName))
+	var properties C.PEVENT_TRACE_PROPERTIES
+
+	status := C.CreateSession(&hSession, &properties, C.CString(sessionName))
+
 	if status != 0 {
 		return Session{}, fmt.Errorf("failed to create session with %v", status)
 	}
 
 	return Session{
-		hSession: &hSession,
-		Name:     sessionName,
+		hSession:   hSession,
+		properties: properties,
+		Name:       sessionName,
 
-		errChan:        make(chan error),
-		eventChan:      make(chan *Event),
+		errChan:   make(chan error),
+		eventChan: make(chan *Event),
 	}, nil
 }
 
@@ -57,7 +63,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 		return fmt.Errorf("failed to parse GUID from string %s", err)
 	}
 	C.EnableTraceEx2(
-		*s.hSession,
+		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
 		EVENT_CONTROL_CODE_ENABLE_PROVIDER,
 		TRACE_LEVEL_VERBOSE,
@@ -80,7 +86,19 @@ func (s *Session) StartSession() error {
 	return nil
 }
 
-func (s *Session) StopSession() error { return nil }
+// StopSession stops trace session.
+func (s *Session) StopSession() error {
+	status := C.ControlTraceW(s.hSession, (*C.ushort)(unsafe.Pointer(nil)), s.properties, EVENT_TRACE_CONTROL_STOP)
+
+	// Note from windows documentation:
+	// If you receive this error when stopping the session, ETW will have
+	// already stopped the session before generating this error.
+	if status != ERROR_MORE_DATA {
+		return fmt.Errorf("fail to stop session with %v", status)
+	}
+	C.free(unsafe.Pointer(s.properties))
+	return nil
+}
 
 func (s *Session) Error() chan error {
 	return s.errChan
@@ -104,12 +122,10 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 	}
 }
 
-
 var (
-	tdh = windows.NewLazySystemDLL("Tdh.dll")
+	tdh               = windows.NewLazySystemDLL("Tdh.dll")
 	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
 )
-
 
 // Go-analog of EVENT_RECORD structure.
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
@@ -146,6 +162,7 @@ type EventDescriptor struct {
 // https://docs.microsoft.com/en-us/windows/win32/etw/retrieving-event-metadata
 func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	var event Event
+
 	if eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
 		event.Properties[""] = C.GoString((*C.char)(eventRecord.UserData))
 		return &event, nil
@@ -162,13 +179,13 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 		eventRecord,
 		pInfo,
 		uintptr(eventRecord.UserData),
-		uintptr(eventRecord.UserData) + uintptr(eventRecord.UserDataLength))
+		uintptr(eventRecord.UserData)+uintptr(eventRecord.UserDataLength))
 
 	event.Properties = make(map[string]interface{}, int(pInfo.TopLevelPropertyCount))
 
 	for i := 0; i < int(pInfo.TopLevelPropertyCount); i++ {
-		name := getPropertyName(pInfo, i)
-		value, err := parser.Parse(i)
+		name := parser.getPropertyName(i)
+		value, err := parser.getPropertyValue(i)
 		if err != nil {
 			spew.Dump(err) // TODO make error channel
 			continue
@@ -180,25 +197,36 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	return &event, nil
 }
 
+// eventParser is used for parsing raw windows structure.
 type eventParser struct {
-	record C.PEVENT_RECORD
-	info C.PTRACE_EVENT_INFO
-	data uintptr
+	record  C.PEVENT_RECORD
+	info    C.PTRACE_EVENT_INFO
+	data    uintptr
 	endData uintptr
 }
 
 func newEventParser(r C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, data uintptr, endData uintptr) *eventParser {
 	return &eventParser{
-		record: r,
-		info: info,
-		data: data,
+		record:  r,
+		info:    info,
+		data:    data,
 		endData: endData,
 	}
 }
 
-func (p* eventParser) Parse(i int) (string, error) {
-	mapInfo, err := getMapInfo(p.record, p.info, i)
-	fmt.Println(mapInfo, err)
+// getPropertyValue parsers property value. You should call getPropertyValue
+// function in an incrementing index only (i = 0, 1, 2 ..). For the correct
+// parsing property value data pointer should point to the right memory.
+// eventParses controls data pointer with each GetPropertyValue call.
+func (p *eventParser) getPropertyValue(i int) (string, error) {
+	mapInfo, _ := getMapInfo(p.record, p.info, i)
+
+	var pMapInfo uintptr
+	if len(mapInfo) == 0 {
+		pMapInfo = uintptr(0)
+	} else {
+		pMapInfo = uintptr(unsafe.Pointer(&mapInfo[0]))
+	}
 
 	var propertyLength C.int
 	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
@@ -212,12 +240,12 @@ func (p* eventParser) Parse(i int) (string, error) {
 
 	_, _, _ = tdhFormatProperty.Call(
 		uintptr(unsafe.Pointer(p.record)),
-		0,
+		pMapInfo,
 		uintptr(8),
 		uintptr(C.GetInType(p.info, C.int(i))),
 		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
-		p.endData - p.data,
+		p.endData-p.data,
 		uintptr(p.data),
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		0,
@@ -225,19 +253,19 @@ func (p* eventParser) Parse(i int) (string, error) {
 	)
 
 	if int(formattedDataSize) == 0 {
-		return "",  nil
+		return "", nil
 	}
 
 	formattedData := make([]byte, int(formattedDataSize))
 
 	_, _, _ = tdhFormatProperty.Call(
 		uintptr(unsafe.Pointer(p.info)),
-		0,
+		pMapInfo,
 		uintptr(8),
 		uintptr(C.GetInType(p.info, C.int(i))),
 		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
-		p.endData - p.data,
+		p.endData-p.data,
 		uintptr(p.data),
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		uintptr(unsafe.Pointer(&formattedData[0])),
@@ -246,10 +274,16 @@ func (p* eventParser) Parse(i int) (string, error) {
 
 	p.data += uintptr(userDataConsumed)
 
-	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(userDataConsumed)), nil
+	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(formattedDataSize)), nil
 }
 
-func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error){
+func (p *eventParser) getPropertyName(i int) string {
+	propertyName := uintptr(C.GetPropertyName(p.info, C.int(i)))
+	len := C.wcslen((C.PWCHAR)(unsafe.Pointer(propertyName)))
+	return createUTF16String(propertyName, int(len))
+}
+
+func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error) {
 	var mapSize C.ulong
 
 	mapName := C.GetMapName(info, C.int(index))
@@ -263,8 +297,6 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]b
 	if status != 122 {
 		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
 	}
-
-	fmt.Println("SOMETHING IN MAPINFO!!!", status)
 
 	mapInfo := make([]byte, int(mapSize))
 	status = C.TdhGetEventMapInformation(
@@ -314,12 +346,6 @@ func getProperty(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (in
 		propertySize)
 
 	return propertyValue, nil
-}
-
-func getPropertyName(info C.PTRACE_EVENT_INFO, index int) string {
-	propertyName := uintptr(C.GetPropertyName(info, C.int(index)))
-	len := C.wcslen((C.PWCHAR)(unsafe.Pointer(propertyName)))
-	return createUTF16String(propertyName, int(len))
 }
 
 func getPropertyCount(info C.PTRACE_EVENT_INFO, index int) int {
@@ -482,4 +508,10 @@ const (
 const (
 	EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1
 	TRACE_LEVEL_VERBOSE                = 5
+
+	EVENT_TRACE_CONTROL_QUERY  = 0
+	EVENT_TRACE_CONTROL_STOP   = 1
+	EVENT_TRACE_CONTROL_UPDATE = 2
+
+	ERROR_MORE_DATA = 234
 )

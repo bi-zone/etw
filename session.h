@@ -12,7 +12,7 @@
 #include <tdh.h>
 #include <in6addr.h>
 
-ULONG CreateSession(TRACEHANDLE* hSession, char* sessionName);
+ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, char* sessionName);
 ULONG StartSession(char* sessionName, PVOID context);
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info, int index);
 ULONG GetPropertyCount(PTRACE_EVENT_INFO info, int index);
