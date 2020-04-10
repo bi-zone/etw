@@ -12,7 +12,6 @@ package tracing_session
 */
 import "C"
 import (
-	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -135,18 +134,16 @@ type Event struct {
 }
 
 type EventHeader struct {
-	Size            uint16
-	HeaderType      uint16
-	Flags           uint16
-	EventProperty   uint16
 	ThreadId        uint32
 	ProcessId       uint32
 	TimeStamp       time.Time
 	EventDescriptor EventDescriptor
-	GUID            windows.GUID
+	ProviderID      windows.GUID
 	ActivityId      windows.GUID
 }
 
+// Go-analog of EVENT_DESCRIPTOR structure.
+// https://docs.microsoft.com/ru-ru/windows/win32/api/evntprov/ns-evntprov-event_descriptor
 type EventDescriptor struct {
 	Id      uint16
 	Version uint8
@@ -157,9 +154,6 @@ type EventDescriptor struct {
 	Keyword uint64
 }
 
-// https://docs.microsoft.com/ru-ru/windows/win32/etw/using-tdhformatproperty-to-consume-event-data
-// https://github.com/microsoft/perfview/blob/master/src/TraceEvent/TraceEvent.cs
-// https://docs.microsoft.com/en-us/windows/win32/etw/retrieving-event-metadata
 func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	var event Event
 
@@ -168,22 +162,21 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 		return &event, nil
 	}
 
-	pInfo, err := getEventInformation(eventRecord)
+	info, err := getEventInformation(eventRecord)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get event information witn %s", err)
 	}
 
-	event.EventHeader.EventDescriptor.Id = uint16(eventRecord.EventHeader.EventDescriptor.Id)
-
 	parser := newEventParser(
 		eventRecord,
-		pInfo,
+		info,
 		uintptr(eventRecord.UserData),
 		uintptr(eventRecord.UserData)+uintptr(eventRecord.UserDataLength))
 
-	event.Properties = make(map[string]interface{}, int(pInfo.TopLevelPropertyCount))
+	event.EventHeader = parser.parseEventHeader()
+	event.Properties = make(map[string]interface{}, int(info.TopLevelPropertyCount))
 
-	for i := 0; i < int(pInfo.TopLevelPropertyCount); i++ {
+	for i := 0; i < int(info.TopLevelPropertyCount); i++ {
 		name := parser.getPropertyName(i)
 		value, err := parser.getPropertyValue(i)
 		if err != nil {
@@ -214,11 +207,91 @@ func newEventParser(r C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, data uintptr, e
 	}
 }
 
+func (p *eventParser) parseEventHeader() EventHeader {
+	return EventHeader{
+		ThreadId:        uint32(p.record.EventHeader.ThreadId),
+		ProcessId:       uint32(p.record.EventHeader.ProcessId),
+		TimeStamp:       p.parseTimestamp(),
+		EventDescriptor: p.getEventDescriptor(),
+		ProviderID:      windowsGuidToGo(p.record.EventHeader.ProviderId),
+		ActivityId:      windowsGuidToGo(p.record.EventHeader.ActivityId),
+	}
+}
+
+func windowsGuidToGo(guid C.GUID) windows.GUID {
+	var data4 [8]byte
+	for i := range data4 {
+		data4[i] = byte(guid.Data4[i])
+	}
+
+	return windows.GUID{
+		Data1: uint32(guid.Data1),
+		Data2: uint16(guid.Data2),
+		Data3: uint16(guid.Data3),
+		Data4: data4,
+	}
+}
+
+func (p *eventParser) parseTimestamp() time.Time {
+	stamp := uint64(C.GetTimeStamp(p.record))
+
+	stamp -= 116444736000000000
+	stamp *= 100
+	return time.Unix(0, int64(stamp)).UTC()
+}
+
+func (p *eventParser) getEventDescriptor() EventDescriptor {
+	return EventDescriptor{
+		Id:      uint16(p.record.EventHeader.EventDescriptor.Id),
+		Version: uint8(p.record.EventHeader.EventDescriptor.Version),
+		Channel: uint8(p.record.EventHeader.EventDescriptor.Channel),
+		Level:   uint8(p.record.EventHeader.EventDescriptor.Level),
+		OpCode:  uint8(p.record.EventHeader.EventDescriptor.Opcode),
+		Task:    uint16(p.record.EventHeader.EventDescriptor.Task),
+		Keyword: uint64(p.record.EventHeader.EventDescriptor.Keyword),
+	}
+}
+
 // getPropertyValue parsers property value. You should call getPropertyValue
 // function in an incrementing index only (i = 0, 1, 2 ..). For the correct
 // parsing property value data pointer should point to the right memory.
 // eventParses controls data pointer with each GetPropertyValue call.
-func (p *eventParser) getPropertyValue(i int) (string, error) {
+func (p *eventParser) getPropertyValue(i int) (interface{}, error) {
+	if p.propertyIsStructure(i) {
+		return p.parseComplexType(i)
+	}
+	return p.parseSimpleType(i)
+}
+
+func (p *eventParser) getPropertyName(i int) string {
+	propertyName := uintptr(C.GetPropertyName(p.info, C.int(i)))
+	length := C.wcslen((C.PWCHAR)(unsafe.Pointer(propertyName)))
+	return createUTF16String(propertyName, int(length))
+}
+
+func (p *eventParser) propertyIsStructure(i int) bool {
+	if int(C.PropertyIsStruct(p.info, C.int(i))) == 1 {
+		return true
+	}
+	return false
+}
+
+func (p *eventParser) parseComplexType(i int) ([]string, error) {
+	startIndex := int(C.GetStartIndex(p.info, C.int(i)))
+	lastIndex := int(C.GetLastIndex(p.info, C.int(i)))
+
+	structure := make([]string, lastIndex-startIndex)
+	for j := startIndex; j < lastIndex; j++ {
+		value, err := p.parseSimpleType(j)
+		if err != nil {
+			return nil, fmt.Errorf("failed parse field of complex property type; %s", err)
+		}
+		structure[j-startIndex] = value
+	}
+	return structure, nil
+}
+
+func (p *eventParser) parseSimpleType(i int) (string, error) {
 	mapInfo, _ := getMapInfo(p.record, p.info, i)
 
 	var pMapInfo uintptr
@@ -277,12 +350,6 @@ func (p *eventParser) getPropertyValue(i int) (string, error) {
 	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(formattedDataSize)), nil
 }
 
-func (p *eventParser) getPropertyName(i int) string {
-	propertyName := uintptr(C.GetPropertyName(p.info, C.int(i)))
-	len := C.wcslen((C.PWCHAR)(unsafe.Pointer(propertyName)))
-	return createUTF16String(propertyName, int(len))
-}
-
 func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error) {
 	var mapSize C.ulong
 
@@ -310,48 +377,6 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]b
 	return mapInfo, nil
 }
 
-func getProperty(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (interface{}, error) {
-	var DataDescriptor C.PROPERTY_DATA_DESCRIPTOR
-
-	DataDescriptor.PropertyName = C.GetPropertyName(info, C.int(index))
-
-	// We don't parse structures yet.
-	// In feature use getPropertyCount function to parse structures.
-	DataDescriptor.ArrayIndex = C.ulong(0)
-
-	var propertySize C.ulong
-
-	status := C.TdhGetPropertySize(event, 0, nil, 1, &DataDescriptor, &propertySize)
-
-	fmt.Println("Actual length", propertySize)
-
-	if status != 0 {
-		return nil, fmt.Errorf("failed to get property size")
-	}
-
-	rawData := make([]byte, int(propertySize))
-	status = C.TdhGetProperty(
-		event,
-		0,
-		nil,
-		1,
-		&DataDescriptor,
-		propertySize,
-		(*C.uchar)(unsafe.Pointer(&rawData[0])))
-
-	propertyValue := formatData(event,
-		C.GetInType(info, C.int(index)),
-		C.GetOutType(info, C.int(index)),
-		rawData,
-		propertySize)
-
-	return propertyValue, nil
-}
-
-func getPropertyCount(info C.PTRACE_EVENT_INFO, index int) int {
-	return int(C.GetPropertyCount(info, C.int(index)))
-}
-
 func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	var pInfo C.PTRACE_EVENT_INFO
 	var bufferSize C.ulong
@@ -373,82 +398,6 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	return pInfo, nil
 }
 
-func formatData(pEvent C.PEVENT_RECORD, InType C.USHORT, OutType C.USHORT, pData []byte, DataSize C.ulong) interface{} {
-	switch InType {
-	case TDH_INTYPE_UNICODESTRING:
-		len := C.wcslen((C.PWCHAR)(unsafe.Pointer(&pData[0])))
-		return createUTF16String(uintptr(unsafe.Pointer(&pData[0])), int(len))
-
-	case TDH_INTYPE_COUNTEDSTRING:
-		len := (int(pData[1]) << 8) & int(pData[0])
-		return createUTF16String(uintptr(unsafe.Pointer(&pData[0])), len)
-
-	case TDH_INTYPE_REVERSEDCOUNTEDSTRING:
-		len := (int(pData[0]) << 8) & int(pData[1])
-		return createUTF16String(uintptr(unsafe.Pointer(&pData[0])), len)
-
-	case TDH_INTYPE_NONNULLTERMINATEDSTRING:
-		len := int(DataSize)
-		return createUTF16String(uintptr(unsafe.Pointer(&pData[0])), len)
-
-	case TDH_INTYPE_ANSISTRING:
-		len := C.strlen((*C.CHAR)(unsafe.Pointer(&pData[0])))
-		return C.GoStringN((*C.CHAR)(unsafe.Pointer(&pData[0])), C.int(len))
-
-	case TDH_INTYPE_COUNTEDANSISTRING:
-		len := (int(pData[1]) << 8) & int(pData[0])
-		return C.GoStringN((*C.CHAR)(unsafe.Pointer(&pData[0])), C.int(len))
-
-	case TDH_INTYPE_REVERSEDCOUNTEDANSISTRING:
-		len := (int(pData[0]) << 8) & int(pData[1])
-		return C.GoStringN((*C.CHAR)(unsafe.Pointer(&pData[0])), C.int(len))
-
-	case TDH_INTYPE_NONNULLTERMINATEDANSISTRING:
-		len := int(DataSize)
-		return C.GoStringN((*C.CHAR)(unsafe.Pointer(&pData[0])), C.int(len))
-
-	case TDH_INTYPE_INT8:
-		return int(pData[0])
-	case TDH_INTYPE_UINT8:
-		return uint(pData[0])
-	case TDH_INTYPE_INT16:
-		return int((uint(pData[1]) << 8) & uint(pData[0]))
-	case TDH_INTYPE_UINT16:
-		return (uint(pData[1]) << 8) & uint(pData[0])
-	case TDH_INTYPE_INT32:
-		return int32(binary.BigEndian.Uint32(pData[:4]))
-	case TDH_INTYPE_UINT32:
-		return binary.BigEndian.Uint32(pData[:4])
-	case TDH_INTYPE_INT64:
-		return int64(binary.BigEndian.Uint64(pData[:8]))
-	case TDH_INTYPE_UINT64:
-		return binary.BigEndian.Uint64(pData[:8])
-	case TDH_INTYPE_FLOAT:
-	case TDH_INTYPE_DOUBLE:
-	case TDH_INTYPE_BOOLEAN:
-		if pData[0] == 0 {
-			return false
-		}
-		return true
-	case TDH_INTYPE_BINARY:
-		return pData
-	case TDH_INTYPE_GUID:
-	case TDH_INTYPE_POINTER:
-	case TDH_INTYPE_SIZET:
-	case TDH_INTYPE_FILETIME:
-	case TDH_INTYPE_SYSTEMTIME:
-	case TDH_INTYPE_SID:
-	case TDH_INTYPE_HEXINT32:
-	case TDH_INTYPE_HEXINT64:
-	case TDH_INTYPE_UNICODECHAR:
-	case TDH_INTYPE_ANSICHAR:
-	case TDH_INTYPE_WBEMSID:
-	default:
-		return "WHATT"
-	}
-	return ""
-}
-
 // Creates UTF16 string from raw parts.
 //
 // Actually in go with has no way to make a slice from raw parts, ref:
@@ -466,44 +415,6 @@ func createUTF16String(ptr uintptr, len int) string {
 }
 
 // windows constants
-const (
-	TDH_INTYPE_NULL = iota
-	TDH_INTYPE_UNICODESTRING
-	TDH_INTYPE_ANSISTRING
-	TDH_INTYPE_INT8
-	TDH_INTYPE_UINT8
-	TDH_INTYPE_INT16
-	TDH_INTYPE_UINT16
-	TDH_INTYPE_INT32
-	TDH_INTYPE_UINT32
-	TDH_INTYPE_INT64
-	TDH_INTYPE_UINT64
-	TDH_INTYPE_FLOAT
-	TDH_INTYPE_DOUBLE
-	TDH_INTYPE_BOOLEAN
-	TDH_INTYPE_BINARY
-	TDH_INTYPE_GUID
-	TDH_INTYPE_POINTER
-	TDH_INTYPE_FILETIME
-	TDH_INTYPE_SYSTEMTIME
-	TDH_INTYPE_SID
-	TDH_INTYPE_HEXINT32
-	TDH_INTYPE_HEXINT64 // End of winmeta intypes.
-)
-
-const (
-	TDH_INTYPE_COUNTEDSTRING = iota + 300 // Start of TDH intypes for WBEM.
-	TDH_INTYPE_COUNTEDANSISTRING
-	TDH_INTYPE_REVERSEDCOUNTEDSTRING
-	TDH_INTYPE_REVERSEDCOUNTEDANSISTRING
-	TDH_INTYPE_NONNULLTERMINATEDSTRING
-	TDH_INTYPE_NONNULLTERMINATEDANSISTRING
-	TDH_INTYPE_UNICODECHAR
-	TDH_INTYPE_ANSICHAR
-	TDH_INTYPE_SIZET
-	TDH_INTYPE_HEXDUMP
-	TDH_INTYPE_WBEMSID
-)
 
 const (
 	EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1

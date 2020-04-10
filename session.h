@@ -23,4 +23,9 @@ LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i);
 ULONG GetPropertyFlags(PTRACE_EVENT_INFO info, int i);
 
 DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength);
-DWORD GetMapInfo(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO info, int i, PEVENT_MAP_INFO pMapInfo);
+
+int PropertyIsStruct(PTRACE_EVENT_INFO info, int i);
+int GetStartIndex(PTRACE_EVENT_INFO info, int i);
+int GetLastIndex(PTRACE_EVENT_INFO info, int i);
+
+ULONGLONG GetTimeStamp(PEVENT_RECORD EventRecord);

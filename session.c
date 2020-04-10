@@ -128,3 +128,22 @@ LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i) {
     return (LPWSTR)((PBYTE)(info) + info->EventPropertyInfoArray[i].nonStructType.MapNameOffset);
 }
 
+int PropertyIsStruct(PTRACE_EVENT_INFO info, int i) {
+    return (info->EventPropertyInfoArray[i].Flags & PropertyStruct) == PropertyStruct;
+}
+
+int GetStartIndex(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].structType.StructStartIndex;
+}
+
+int GetLastIndex(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].structType.StructStartIndex +
+                    info->EventPropertyInfoArray[i].structType.NumOfStructMembers;
+}
+
+ULONGLONG GetTimeStamp(PEVENT_RECORD EventRecord) {
+    ULONGLONG time;
+    time = EventRecord->EventHeader.TimeStamp.HighPart;
+    time = (time << 32) | EventRecord->EventHeader.TimeStamp.LowPart;
+    return time;
+}

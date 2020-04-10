@@ -16,7 +16,7 @@ func processEvent(ctx context.Context, session etw.Session) {
 	for {
 		select {
 		case e := <-session.Event():
-			spew.Dump(e)
+			spew.Dump(e.EventHeader)
 		case err := <-session.Error():
 			panic(err)
 		case <-ctx.Done():
@@ -58,7 +58,7 @@ func main() {
 		}
 	}()
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 	err = session.StopSession()
 	if err != nil {
 		panic(err)
