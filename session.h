@@ -29,3 +29,13 @@ int GetStartIndex(PTRACE_EVENT_INFO info, int i);
 int GetLastIndex(PTRACE_EVENT_INFO info, int i);
 
 ULONGLONG GetTimeStamp(PEVENT_RECORD EventRecord);
+ULONG GetKernelTime(EVENT_HEADER header);
+ULONG GetUserTime(EVENT_HEADER header);
+
+USHORT GetExtType(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);
+ULONGLONG GetDataPtr(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);
+USHORT GetDataSize(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);
+
+
+ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j);
+ULONGLONG GetAddress64(PEVENT_EXTENDED_ITEM_STACK_TRACE64 trace64, int j);

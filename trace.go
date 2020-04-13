@@ -7,6 +7,7 @@ package tracing_session
 #define _WIN32_WINNT _WIN32_WINNT_WIN7
 
 #include "session.h"
+#include "Sddl.h" // for sid converting
 
 
 */
@@ -129,8 +130,9 @@ var (
 // Go-analog of EVENT_RECORD structure.
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
-	EventHeader EventHeader
-	Properties  map[string]interface{}
+	EventHeader  EventHeader
+	ExtendedData map[string]interface{}
+	Properties   map[string]interface{}
 }
 
 type EventHeader struct {
@@ -139,6 +141,8 @@ type EventHeader struct {
 	TimeStamp       time.Time
 	EventDescriptor EventDescriptor
 	ProviderID      windows.GUID
+	KernelTime      uint32
+	UserTime        uint32
 	ActivityId      windows.GUID
 }
 
@@ -173,6 +177,7 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 		uintptr(eventRecord.UserData),
 		uintptr(eventRecord.UserData)+uintptr(eventRecord.UserDataLength))
 
+	event.ExtendedData = parser.parseExtendedInfo()
 	event.EventHeader = parser.parseEventHeader()
 	event.Properties = make(map[string]interface{}, int(info.TopLevelPropertyCount))
 
@@ -207,6 +212,70 @@ func newEventParser(r C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, data uintptr, e
 	}
 }
 
+func (p *eventParser) parseExtendedInfo() map[string]interface{} {
+	extendedData := make(map[string]interface{}, int(p.record.ExtendedDataCount))
+
+	for i := 0; i < int(p.record.ExtendedDataCount); i++ {
+		dataPtr := unsafe.Pointer(uintptr(C.GetDataPtr(p.record.ExtendedData, C.int(i))))
+
+		switch C.GetExtType(p.record.ExtendedData, C.int(i)) {
+		case EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID:
+			cGUID := (C.LPGUID)(dataPtr)
+			extendedData["ActivityId"] = windowsGuidToGo(*cGUID)
+
+		case EVENT_HEADER_EXT_TYPE_SID:
+			cSID := (C.PISID)(dataPtr)
+			sid := make([]byte, 50)
+			C.ConvertSidToStringSidA((C.PVOID)(cSID), (*C.LPSTR)(unsafe.Pointer(&sid[0])))
+			extendedData["UserID"] = string(sid)
+
+		case EVENT_HEADER_EXT_TYPE_TS_ID:
+			cSessionID := (C.PULONG)(dataPtr)
+			extendedData["SessionId"] = uint32(*cSessionID)
+
+		case EVENT_HEADER_EXT_TYPE_INSTANCE_INFO:
+			instanceInfo := (C.PEVENT_EXTENDED_ITEM_INSTANCE)(dataPtr)
+			extendedData["InstanceInfo"] = map[string]interface{}{
+				"InstanceID":       uint32(instanceInfo.InstanceId),
+				"ParentInstanceId": uint32(instanceInfo.ParentInstanceId),
+				"ParentGuid":       windowsGuidToGo(instanceInfo.ParentGuid),
+			}
+
+		case EVENT_HEADER_EXT_TYPE_STACK_TRACE32:
+			stack32 := (C.PEVENT_EXTENDED_ITEM_STACK_TRACE32)(dataPtr)
+			arraySize := (int(C.GetDataSize(p.record.ExtendedData, C.int(i))) - 8) / 4
+
+			address := make([]uint32, arraySize)
+			for j := 0; j < arraySize; j++ {
+				address[j] = uint32(C.GetAddress32(stack32, C.int(j)))
+			}
+
+			extendedData["StackTrace32"] = map[string]interface{}{
+				"MatchedID": uint64(stack32.MatchId),
+				"Address":   address,
+			}
+
+		case EVENT_HEADER_EXT_TYPE_STACK_TRACE64:
+			stack64 := (C.PEVENT_EXTENDED_ITEM_STACK_TRACE64)(dataPtr)
+			arraySize := (int(C.GetDataSize(p.record.ExtendedData, C.int(i))) - 8) / 8
+
+			address := make([]uint64, arraySize)
+			for j := 0; j < arraySize; j++ {
+				address[j] = uint64(C.GetAddress64(stack64, C.int(j)))
+			}
+
+			extendedData["StackTrace64"] = map[string]interface{}{
+				"MatchedID": uint64(stack64.MatchId),
+				"Address":   address,
+			}
+		case EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL:
+		case EVENT_HEADER_EXT_TYPE_PROV_TRAITS:
+		}
+	}
+
+	return extendedData
+}
+
 func (p *eventParser) parseEventHeader() EventHeader {
 	return EventHeader{
 		ThreadId:        uint32(p.record.EventHeader.ThreadId),
@@ -214,6 +283,8 @@ func (p *eventParser) parseEventHeader() EventHeader {
 		TimeStamp:       p.parseTimestamp(),
 		EventDescriptor: p.getEventDescriptor(),
 		ProviderID:      windowsGuidToGo(p.record.EventHeader.ProviderId),
+		KernelTime:      uint32(C.GetKernelTime(p.record.EventHeader)),
+		UserTime:        uint32(C.GetUserTime(p.record.EventHeader)),
 		ActivityId:      windowsGuidToGo(p.record.EventHeader.ActivityId),
 	}
 }
@@ -425,4 +496,15 @@ const (
 	EVENT_TRACE_CONTROL_UPDATE = 2
 
 	ERROR_MORE_DATA = 234
+)
+
+const (
+	EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID = iota + 1
+	EVENT_HEADER_EXT_TYPE_SID
+	EVENT_HEADER_EXT_TYPE_TS_ID
+	EVENT_HEADER_EXT_TYPE_INSTANCE_INFO
+	EVENT_HEADER_EXT_TYPE_STACK_TRACE32
+	EVENT_HEADER_EXT_TYPE_STACK_TRACE64
+	EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL
+	EVENT_HEADER_EXT_TYPE_PROV_TRAITS
 )
