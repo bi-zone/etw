@@ -176,3 +176,29 @@ ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j) {
 ULONGLONG GetAddress64(PEVENT_EXTENDED_ITEM_STACK_TRACE64 trace64, int j) {
    return trace64->Address[j];
 }
+
+typedef struct _EVENT_FILTER_EVENT_ID {
+  BOOLEAN FilterIn;
+  UCHAR   Reserved;
+  USHORT  Count;
+  USHORT  Events[ANYSIZE_ARRAY];
+} EVENT_FILTER_EVENT_ID, *PEVENT_FILTER_EVENT_ID;
+
+ULONGLONG CreateEventDescriptor(EVENT_FILTER_DESCRIPTOR* filterDesc) {
+    int memorySize = sizeof(EVENT_FILTER_EVENT_ID) + sizeof(USHORT) * 1;
+    char* memory = malloc(memorySize);
+
+    EVENT_FILTER_EVENT_ID* filterEventIds = (EVENT_FILTER_EVENT_ID*)memory;
+
+    filterEventIds->FilterIn = TRUE;
+    filterEventIds->Reserved = 0;
+    filterEventIds->Count = 1;
+
+    filterEventIds->Events[0] = 11;
+
+    filterDesc->Ptr = (ULONGLONG)filterEventIds;
+    filterDesc->Size = (ULONG)(memorySize);
+    filterDesc->Type = 0x80000200;
+
+    return 0;
+}
