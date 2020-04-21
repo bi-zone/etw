@@ -12,18 +12,13 @@ package tracing_session
 import "C"
 import (
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
-	"golang.org/x/sys/windows"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-
-var (
-	tdh               = windows.NewLazySystemDLL("Tdh.dll")
-	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
-)
 
 func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	var event Event
@@ -52,8 +47,10 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 		name := parser.getPropertyName(i)
 		value, err := parser.getPropertyValue(i)
 		if err != nil {
-			spew.Dump(err) // TODO make error channel
-			continue
+			// We suppose continuing parsing is unnecessary.
+			// Because the success of parsing the next values depends on
+			// previous values.And if it ends with error next results will be wrong.
+			return nil, fmt.Errorf("failed to parse property value %s", err)
 		}
 
 		event.Properties[name] = value
@@ -62,7 +59,7 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	return &event, nil
 }
 
-// eventParser is used for parsing raw windows structure.
+// eventParser is used for parsing raw EVENT_RECORD structure.
 type eventParser struct {
 	record  C.PEVENT_RECORD
 	info    C.PTRACE_EVENT_INFO
@@ -79,6 +76,7 @@ func newEventParser(r C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, data uintptr, e
 	}
 }
 
+// parseExtendedInfo parsers extended field from EVENT_RECORD structure.
 func (p *eventParser) parseExtendedInfo() map[string]interface{} {
 	extendedData := make(map[string]interface{}, int(p.record.ExtendedDataCount))
 
@@ -143,6 +141,7 @@ func (p *eventParser) parseExtendedInfo() map[string]interface{} {
 	return extendedData
 }
 
+// parseEventHeader translates C.EventHeader structure to go structure.
 func (p *eventParser) parseEventHeader() EventHeader {
 	return EventHeader{
 		ThreadId:        uint32(p.record.EventHeader.ThreadId),
@@ -228,6 +227,12 @@ func (p *eventParser) parseComplexType(i int) ([]string, error) {
 	}
 	return structure, nil
 }
+
+
+var (
+	tdh               = windows.NewLazySystemDLL("Tdh.dll")
+	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
+)
 
 func (p *eventParser) parseSimpleType(i int) (string, error) {
 	mapInfo, _ := getMapInfo(p.record, p.info, i)
@@ -376,27 +381,5 @@ const (
 	EVENT_HEADER_EXT_TYPE_PROV_TRAITS
 )
 
-const (
-	EVENT_FILTER_TYPE_NONE = 0x00000000
-	EVENT_FILTER_TYPE_SCHEMATIZED = 0x80000000
-	EVENT_FILTER_TYPE_SYSTEM_FLAGS = 0x80000001
-	EVENT_FILTER_TYPE_TRACEHANDLE = 0x80000002
-	EVENT_FILTER_TYPE_PID = 0x80000004
-	EVENT_FILTER_TYPE_EXECUTABLE_NAME = 0x80000004
-	EVENT_FILTER_TYPE_PACKAGE_ID = 0x80000010
-	EVENT_FILTER_TYPE_PACKAGE_APP_ID = 	0x80000020
-	EVENT_FILTER_TYPE_PAYLOAD = 0x80000100
-	EVENT_FILTER_TYPE_EVENT_ID = 0x80000200
-	EVENT_FILTER_TYPE_EVENT_NAME = 0x80000400
-	EVENT_FILTER_TYPE_STACKWALK = 0x80001000
-	EVENT_FILTER_TYPE_STACKWALK_NAME = 0x80002000
-	EVENT_FILTER_TYPE_STACKWALK_LEVEL_KW = 0x80004000
-)
 
-const (
-	ENABLE_TRACE_PARAMETERS_VERSION = 1
-	ENABLE_TRACE_PARAMETERS_VERSION_2 = 2
-
-	EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0 = 0x010
-)
 

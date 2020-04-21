@@ -5,7 +5,7 @@ ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, 
     *properties = NULL;
 
     const size_t buffSize = sizeof(EVENT_TRACE_PROPERTIES) + strlen(sessionName) + 1;
-    *properties = calloc(buffSize, 1);
+    *properties = calloc(buffSize, sizeof(char));
     (*properties)->Wnode.BufferSize = buffSize;
     (*properties)->Wnode.ClientContext = 1;
     (*properties)->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
@@ -43,7 +43,6 @@ ULONG StartSession(char* sessionName, PVOID context) {
         return status;
     }
 }
-
 
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
     return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
@@ -176,6 +175,8 @@ ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j) {
 ULONGLONG GetAddress64(PEVENT_EXTENDED_ITEM_STACK_TRACE64 trace64, int j) {
    return trace64->Address[j];
 }
+
+
 
 typedef struct _EVENT_FILTER_EVENT_ID {
   BOOLEAN FilterIn;

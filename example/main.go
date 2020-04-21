@@ -43,6 +43,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

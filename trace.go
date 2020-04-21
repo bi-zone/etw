@@ -34,6 +34,15 @@ type Session struct {
 	eventChan chan *Event
 }
 
+
+func (s *Session) Error() chan error {
+	return s.errChan
+}
+
+func (s *Session) Event() chan *Event {
+	return s.eventChan
+}
+
 // NewSession creates windows trace session instance.
 func NewSession(sessionName string) (Session, error) {
 	var hSession C.TRACEHANDLE
@@ -74,12 +83,12 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 
 	spew.Dump(filterDesc)
 
-	params.Version = 2
+	params.Version = ENABLE_TRACE_PARAMETERS_VERSION_2
 	params.EnableProperty = EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0
 	params.SourceId = windowsGuidToGo(s.properties.Wnode.Guid)
 	params.ControlFlags = 0
 	params.EnableFilterDesc = &filterDesc
-	params.FilterDescCount = 1
+	params.FilterDescCount = 0
 
 	spew.Dump(params)
 
@@ -134,14 +143,6 @@ func (s *Session) StopSession() error {
 	return nil
 }
 
-func (s *Session) Error() chan error {
-	return s.errChan
-}
-
-func (s *Session) Event() chan *Event {
-	return s.eventChan
-}
-
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {
 	key := int(uintptr(eventRecord.UserContext))
@@ -157,8 +158,7 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 }
 
 
-
-// Go-analog of EVENT_RECORD structure.
+// Event represents parsing result from structure:
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
 	EventHeader  EventHeader
@@ -166,6 +166,7 @@ type Event struct {
 	Properties   map[string]interface{}
 }
 
+// EventHeader consists common event information.
 type EventHeader struct {
 	ThreadId        uint32
 	ProcessId       uint32
@@ -188,3 +189,28 @@ type EventDescriptor struct {
 	Task    uint16
 	Keyword uint64
 }
+
+// windows constants
+const (
+	EVENT_FILTER_TYPE_NONE = 0x00000000
+	EVENT_FILTER_TYPE_SCHEMATIZED = 0x80000000
+	EVENT_FILTER_TYPE_SYSTEM_FLAGS = 0x80000001
+	EVENT_FILTER_TYPE_TRACEHANDLE = 0x80000002
+	EVENT_FILTER_TYPE_PID = 0x80000004
+	EVENT_FILTER_TYPE_EXECUTABLE_NAME = 0x80000004
+	EVENT_FILTER_TYPE_PACKAGE_ID = 0x80000010
+	EVENT_FILTER_TYPE_PACKAGE_APP_ID = 	0x80000020
+	EVENT_FILTER_TYPE_PAYLOAD = 0x80000100
+	EVENT_FILTER_TYPE_EVENT_ID = 0x80000200
+	EVENT_FILTER_TYPE_EVENT_NAME = 0x80000400
+	EVENT_FILTER_TYPE_STACKWALK = 0x80001000
+	EVENT_FILTER_TYPE_STACKWALK_NAME = 0x80002000
+	EVENT_FILTER_TYPE_STACKWALK_LEVEL_KW = 0x80004000
+)
+
+const (
+	ENABLE_TRACE_PARAMETERS_VERSION = 1
+	ENABLE_TRACE_PARAMETERS_VERSION_2 = 2
+
+	EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0 = 0x010
+)
