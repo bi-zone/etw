@@ -8,7 +8,7 @@ package tracing_session
 
 #include "session.h"
 #include "Sddl.h" // for sid converting
- */
+*/
 import "C"
 import (
 	"fmt"
@@ -18,7 +18,6 @@ import (
 
 	"golang.org/x/sys/windows"
 )
-
 
 func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 	var event Event
@@ -90,9 +89,12 @@ func (p *eventParser) parseExtendedInfo() map[string]interface{} {
 
 		case EVENT_HEADER_EXT_TYPE_SID:
 			cSID := (C.PISID)(dataPtr)
-			sid := make([]byte, 50)
-			C.ConvertSidToStringSidA((C.PVOID)(cSID), (*C.LPSTR)(unsafe.Pointer(&sid[0])))
-			extendedData["UserID"] = string(sid)
+			var sid C.LPSTR
+			C.ConvertSidToStringSidA((C.PVOID)(cSID), &sid)
+
+			extendedData["UserID"] = C.GoString((*C.char)(sid))
+
+			C.LocalFree((C.HLOCAL)(sid))
 
 		case EVENT_HEADER_EXT_TYPE_TS_ID:
 			cSessionID := (C.PULONG)(dataPtr)
@@ -227,7 +229,6 @@ func (p *eventParser) parseComplexType(i int) ([]string, error) {
 	}
 	return structure, nil
 }
-
 
 var (
 	tdh               = windows.NewLazySystemDLL("Tdh.dll")
@@ -380,6 +381,3 @@ const (
 	EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL
 	EVENT_HEADER_EXT_TYPE_PROV_TRAITS
 )
-
-
-

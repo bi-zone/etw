@@ -1,20 +1,17 @@
 package tracing_session
 
 /*
-#cgo LDFLAGS: -ltdh -ggdb3 -O0
+#cgo LDFLAGS: -ltdh
 
 #undef _WIN32_WINNT
 #define _WIN32_WINNT _WIN32_WINNT_WIN7
 
 #include "session.h"
-#include "Sddl.h" // for sid converting
-
 
 */
 import "C"
 import (
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"math/rand"
 	"sync"
 	"time"
@@ -33,7 +30,6 @@ type Session struct {
 	errChan   chan error
 	eventChan chan *Event
 }
-
 
 func (s *Session) Error() chan error {
 	return s.errChan
@@ -65,7 +61,7 @@ func NewSession(sessionName string) (Session, error) {
 }
 
 var (
-	api32               = windows.NewLazySystemDLL("Advapi32.dll")
+	api32          = windows.NewLazySystemDLL("Advapi32.dll")
 	EnableTraceEx2 = api32.NewProc("EnableTraceEx2")
 )
 
@@ -76,21 +72,14 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 		return fmt.Errorf("failed to parse GUID from string %s", err)
 	}
 
-	var params EnableTraceParameters
-
-	var filterDesc C.EVENT_FILTER_DESCRIPTOR
-	C.CreateEventDescriptor(&filterDesc)
-
-	spew.Dump(filterDesc)
+	var params C.ENABLE_TRACE_PARAMETERS
 
 	params.Version = ENABLE_TRACE_PARAMETERS_VERSION_2
-	params.EnableProperty = EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0
-	params.SourceId = windowsGuidToGo(s.properties.Wnode.Guid)
+	params.EnableProperty = EVENT_ENABLE_PROPERTY_SID
+	params.SourceId = s.properties.Wnode.Guid
 	params.ControlFlags = 0
-	params.EnableFilterDesc = &filterDesc
+	params.EnableFilterDesc = nil
 	params.FilterDescCount = 0
-
-	spew.Dump(params)
 
 	r1, r2, lastErr := EnableTraceEx2.Call(
 		uintptr(s.hSession),
@@ -109,12 +98,12 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 // This structure has not FilterDescCount field in the mingw header file.
 // https://docs.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-enable_trace_parameters
 type EnableTraceParameters struct {
-	Version uint32
-	EnableProperty uint32
-	ControlFlags uint32
-	SourceId windows.GUID
+	Version          uint32
+	EnableProperty   uint32
+	ControlFlags     uint32
+	SourceId         windows.GUID
 	EnableFilterDesc C.PEVENT_FILTER_DESCRIPTOR
-	FilterDescCount uint32
+	FilterDescCount  uint32
 }
 
 // StartSession starts event consuming from session.
@@ -157,7 +146,6 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 	}
 }
 
-
 // Event represents parsing result from structure:
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
@@ -192,25 +180,34 @@ type EventDescriptor struct {
 
 // windows constants
 const (
-	EVENT_FILTER_TYPE_NONE = 0x00000000
-	EVENT_FILTER_TYPE_SCHEMATIZED = 0x80000000
-	EVENT_FILTER_TYPE_SYSTEM_FLAGS = 0x80000001
-	EVENT_FILTER_TYPE_TRACEHANDLE = 0x80000002
-	EVENT_FILTER_TYPE_PID = 0x80000004
-	EVENT_FILTER_TYPE_EXECUTABLE_NAME = 0x80000004
-	EVENT_FILTER_TYPE_PACKAGE_ID = 0x80000010
-	EVENT_FILTER_TYPE_PACKAGE_APP_ID = 	0x80000020
-	EVENT_FILTER_TYPE_PAYLOAD = 0x80000100
-	EVENT_FILTER_TYPE_EVENT_ID = 0x80000200
-	EVENT_FILTER_TYPE_EVENT_NAME = 0x80000400
-	EVENT_FILTER_TYPE_STACKWALK = 0x80001000
-	EVENT_FILTER_TYPE_STACKWALK_NAME = 0x80002000
+	EVENT_FILTER_TYPE_NONE               = 0x00000000
+	EVENT_FILTER_TYPE_SCHEMATIZED        = 0x80000000
+	EVENT_FILTER_TYPE_SYSTEM_FLAGS       = 0x80000001
+	EVENT_FILTER_TYPE_TRACEHANDLE        = 0x80000002
+	EVENT_FILTER_TYPE_PID                = 0x80000004
+	EVENT_FILTER_TYPE_EXECUTABLE_NAME    = 0x80000004
+	EVENT_FILTER_TYPE_PACKAGE_ID         = 0x80000010
+	EVENT_FILTER_TYPE_PACKAGE_APP_ID     = 0x80000020
+	EVENT_FILTER_TYPE_PAYLOAD            = 0x80000100
+	EVENT_FILTER_TYPE_EVENT_ID           = 0x80000200
+	EVENT_FILTER_TYPE_EVENT_NAME         = 0x80000400
+	EVENT_FILTER_TYPE_STACKWALK          = 0x80001000
+	EVENT_FILTER_TYPE_STACKWALK_NAME     = 0x80002000
 	EVENT_FILTER_TYPE_STACKWALK_LEVEL_KW = 0x80004000
 )
 
 const (
-	ENABLE_TRACE_PARAMETERS_VERSION = 1
+	ENABLE_TRACE_PARAMETERS_VERSION   = 1
 	ENABLE_TRACE_PARAMETERS_VERSION_2 = 2
 
-	EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0 = 0x010
+	EVENT_ENABLE_PROPERTY_SID               = 0x001
+	EVENT_ENABLE_PROPERTY_TS_ID             = 0x002
+	EVENT_ENABLE_PROPERTY_STACK_TRACE       = 0x004
+	EVENT_ENABLE_PROPERTY_PSM_KEY           = 0x008
+	EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0  = 0x010
+	EVENT_ENABLE_PROPERTY_PROVIDER_GROUP    = 0x020
+	EVENT_ENABLE_PROPERTY_ENABLE_KEYWORD_0  = 0x040
+	EVENT_ENABLE_PROPERTY_PROCESS_START_KEY = 0x080
+	EVENT_ENABLE_PROPERTY_EVENT_KEY         = 0x100
+	EVENT_ENABLE_PROPERTY_EXCLUDE_INPRIVATE = 0x200
 )
