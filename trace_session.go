@@ -12,15 +12,18 @@ package tracing_session
 import "C"
 import (
 	"fmt"
-	"math/rand"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-var sessions sync.Map
+var (
+	sessions       sync.Map
+	sessionCounter uint64
+)
 
 func (s *Session) Error() chan error {
 	return s.errChan
@@ -87,7 +90,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 // StartSession starts event consuming from session.
 // N.B. Blocking!
 func (s *Session) StartSession() error {
-	key := rand.Int()
+	key := atomic.AddUint64(&sessionCounter, 1)
 	sessions.Store(key, s)
 	status := C.StartSession(C.CString(s.Name), C.PVOID(uintptr(key)))
 	if status != 0 {
@@ -98,7 +101,11 @@ func (s *Session) StartSession() error {
 
 // StopSession stops trace session.
 func (s *Session) StopSession() error {
-	status := C.ControlTraceW(s.hSession, (*C.ushort)(unsafe.Pointer(nil)), s.properties, EVENT_TRACE_CONTROL_STOP)
+	status := C.ControlTraceW(
+		s.hSession,
+		(*C.ushort)(unsafe.Pointer(nil)),
+		s.properties,
+		EVENT_TRACE_CONTROL_STOP)
 
 	// Note from windows documentation:
 	// If you receive this error when stopping the session, ETW will have
