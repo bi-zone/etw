@@ -12,6 +12,7 @@ package tracing_session
 import "C"
 import (
 	"fmt"
+	"strconv"
 	"syscall"
 	"time"
 	"unsafe"
@@ -46,9 +47,10 @@ func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
 		name := parser.getPropertyName(i)
 		value, err := parser.getPropertyValue(i)
 		if err != nil {
-			// We suppose continuing parsing is unnecessary.
-			// Because the success of parsing the next values depends on
-			// previous values.And if it ends with error next results will be wrong.
+			// We suppose continuing parsing is pointless. Because
+			// the success of parsing the next values depends on previous
+			// values. And if it ends with error next parsing results
+			// will be wrong.
 			return nil, fmt.Errorf("failed to parse property value %s", err)
 		}
 
@@ -248,7 +250,7 @@ func (p *eventParser) parseSimpleType(i int) (string, error) {
 	var propertyLength C.int
 	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
 
-	if status != 0 {
+	if syscall.Errno(status) != windows.ERROR_SUCCESS {
 		return "", fmt.Errorf("failed to get property length with %v", status)
 	}
 
@@ -258,7 +260,7 @@ func (p *eventParser) parseSimpleType(i int) (string, error) {
 	_, _, _ = tdhFormatProperty.Call(
 		uintptr(unsafe.Pointer(p.record)),
 		pMapInfo,
-		uintptr(8),
+		uintptr(strconv.IntSize),
 		uintptr(C.GetInType(p.info, C.int(i))),
 		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
@@ -296,16 +298,14 @@ func (p *eventParser) parseSimpleType(i int) (string, error) {
 
 func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error) {
 	var mapSize C.ulong
-
 	mapName := C.GetMapName(info, C.int(index))
-
 	status := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
 
-	if status == 1168 {
+	if syscall.Errno(status) == windows.ERROR_NOT_FOUND {
 		return nil, nil
 	}
 
-	if status != 122 {
+	if syscall.Errno(status) != windows.ERROR_INSUFFICIENT_BUFFER {
 		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
 	}
 
@@ -315,9 +315,11 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]b
 		C.GetMapName(info, C.int(index)),
 		(C.PEVENT_MAP_INFO)(unsafe.Pointer(&mapInfo[0])),
 		&mapSize)
-	if status != 0 {
+
+	if syscall.Errno(status) != windows.ERROR_SUCCESS {
 		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
 	}
+
 	return mapInfo, nil
 }
 
@@ -328,7 +330,7 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	// get structure size
 	status := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 
-	if C.ERROR_INSUFFICIENT_BUFFER == status {
+	if syscall.Errno(status) == windows.ERROR_INSUFFICIENT_BUFFER {
 		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.ulonglong(bufferSize)))
 		if pInfo == nil {
 			return nil, fmt.Errorf("failed to allocate memory for event info (size=%v)", bufferSize)
@@ -336,7 +338,7 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 
 		status = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 	}
-	if C.ERROR_SUCCESS != status {
+	if syscall.Errno(status) != windows.ERROR_SUCCESS {
 		return nil, fmt.Errorf("TdhGetEventInformation failed with %v", status)
 	}
 	return pInfo, nil
@@ -357,27 +359,3 @@ func createUTF16String(ptr uintptr, len int) string {
 	bytes := (*[1 << 29]uint16)(unsafe.Pointer(ptr))[:len:len]
 	return syscall.UTF16ToString(bytes)
 }
-
-// windows constants
-
-const (
-	EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1
-	TRACE_LEVEL_VERBOSE                = 5
-
-	EVENT_TRACE_CONTROL_QUERY  = 0
-	EVENT_TRACE_CONTROL_STOP   = 1
-	EVENT_TRACE_CONTROL_UPDATE = 2
-
-	ERROR_MORE_DATA = 234
-)
-
-const (
-	EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID = iota + 1
-	EVENT_HEADER_EXT_TYPE_SID
-	EVENT_HEADER_EXT_TYPE_TS_ID
-	EVENT_HEADER_EXT_TYPE_INSTANCE_INFO
-	EVENT_HEADER_EXT_TYPE_STACK_TRACE32
-	EVENT_HEADER_EXT_TYPE_STACK_TRACE64
-	EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL
-	EVENT_HEADER_EXT_TYPE_PROV_TRAITS
-)
