@@ -3,12 +3,9 @@
 
 #include <windows.h>
 #include <stdio.h>
-#include <wbemidl.h>
-#include <wmistr.h>
 #include <evntcons.h>
 #include <evntprov.h>
 #include <evntrace.h>
-#include <securitybaseapi.h>
 #include <tdh.h>
 #include <in6addr.h>
 
@@ -17,11 +14,9 @@ ULONG StartSession(char* sessionName, PVOID context);
 
 // Helpers for event property parsing.
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info, int index);
-ULONG GetPropertyCount(PTRACE_EVENT_INFO info, int index);
 USHORT GetInType(PTRACE_EVENT_INFO info, int index);
 USHORT GetOutType(PTRACE_EVENT_INFO info, int index);
 LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i);
-ULONG GetPropertyFlags(PTRACE_EVENT_INFO info, int i);
 DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength);
 int PropertyIsStruct(PTRACE_EVENT_INFO info, int i);
 int GetStartIndex(PTRACE_EVENT_INFO info, int i);
@@ -36,8 +31,3 @@ ULONGLONG GetDataPtr(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);
 USHORT GetDataSize(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);
 ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j);
 ULONGLONG GetAddress64(PEVENT_EXTENDED_ITEM_STACK_TRACE64 trace64, int j);
-
-
-// Filtering.
-
-ULONGLONG CreateEventDescriptor(EVENT_FILTER_DESCRIPTOR* filterDesc);

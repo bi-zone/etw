@@ -48,9 +48,6 @@ ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
     return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
 
-ULONG GetPropertyCount(PTRACE_EVENT_INFO info, int i) {
-    return info->EventPropertyInfoArray[i].count;
-}
 
 USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].nonStructType.InType;
@@ -58,15 +55,6 @@ USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
 
 USHORT GetOutType(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].nonStructType.OutType;
-}
-
-void RemoveTrailingSpace(PEVENT_MAP_INFO pMapInfo) {
-    DWORD ByteLength = 0;
-
-    for (DWORD i = 0; i < pMapInfo->EntryCount; i++) {
-        ByteLength = (wcslen((LPWSTR)((PBYTE)pMapInfo + pMapInfo->MapEntryArray[i].OutputOffset)) - 1) * 2;
-        *((LPWSTR)((PBYTE)pMapInfo + (pMapInfo->MapEntryArray[i].OutputOffset + ByteLength))) = L'\0';
-    }
 }
 
 DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength) {
@@ -174,32 +162,4 @@ ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j) {
 
 ULONGLONG GetAddress64(PEVENT_EXTENDED_ITEM_STACK_TRACE64 trace64, int j) {
    return trace64->Address[j];
-}
-
-
-
-typedef struct _EVENT_FILTER_EVENT_ID {
-  BOOLEAN FilterIn;
-  UCHAR   Reserved;
-  USHORT  Count;
-  USHORT  Events[ANYSIZE_ARRAY];
-} EVENT_FILTER_EVENT_ID, *PEVENT_FILTER_EVENT_ID;
-
-ULONGLONG CreateEventDescriptor(EVENT_FILTER_DESCRIPTOR* filterDesc) {
-    int memorySize = sizeof(EVENT_FILTER_EVENT_ID) + sizeof(USHORT) * 1;
-    char* memory = malloc(memorySize);
-
-    EVENT_FILTER_EVENT_ID* filterEventIds = (EVENT_FILTER_EVENT_ID*)memory;
-
-    filterEventIds->FilterIn = TRUE;
-    filterEventIds->Reserved = 0;
-    filterEventIds->Count = 1;
-
-    filterEventIds->Events[0] = 11;
-
-    filterDesc->Ptr = (ULONGLONG)filterEventIds;
-    filterDesc->Size = (ULONG)(memorySize);
-    filterDesc->Type = 0x80000200;
-
-    return 0;
 }

@@ -60,11 +60,6 @@ func NewSession(sessionName string) (Session, error) {
 	}, nil
 }
 
-var (
-	api32          = windows.NewLazySystemDLL("Advapi32.dll")
-	EnableTraceEx2 = api32.NewProc("EnableTraceEx2")
-)
-
 // SubscribeToProvider subscribes session to a provider.
 func (s *Session) SubscribeToProvider(providerGUID string) error {
 	guid, err := windows.GUIDFromString(providerGUID)
@@ -81,17 +76,20 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 	params.EnableFilterDesc = nil
 	params.FilterDescCount = 0
 
-	r1, r2, lastErr := EnableTraceEx2.Call(
-		uintptr(s.hSession),
-		uintptr(unsafe.Pointer(&guid)),
+	status := C.EnableTraceEx2(
+		s.hSession,
+		(*C.GUID)(unsafe.Pointer(&guid)),
 		EVENT_CONTROL_CODE_ENABLE_PROVIDER,
 		TRACE_LEVEL_VERBOSE,
-		0, // TODO filters
+		0, // TODO config
 		0,
 		0,
-		uintptr(unsafe.Pointer(&params)))
+		&params)
 
-	fmt.Println(r1, r2, lastErr)
+	if status != 0 {
+		return fmt.Errorf("failed to subscribe to provider with %d", status)
+	}
+
 	return nil
 }
 
@@ -177,24 +175,6 @@ type EventDescriptor struct {
 	Task    uint16
 	Keyword uint64
 }
-
-// windows constants
-const (
-	EVENT_FILTER_TYPE_NONE               = 0x00000000
-	EVENT_FILTER_TYPE_SCHEMATIZED        = 0x80000000
-	EVENT_FILTER_TYPE_SYSTEM_FLAGS       = 0x80000001
-	EVENT_FILTER_TYPE_TRACEHANDLE        = 0x80000002
-	EVENT_FILTER_TYPE_PID                = 0x80000004
-	EVENT_FILTER_TYPE_EXECUTABLE_NAME    = 0x80000004
-	EVENT_FILTER_TYPE_PACKAGE_ID         = 0x80000010
-	EVENT_FILTER_TYPE_PACKAGE_APP_ID     = 0x80000020
-	EVENT_FILTER_TYPE_PAYLOAD            = 0x80000100
-	EVENT_FILTER_TYPE_EVENT_ID           = 0x80000200
-	EVENT_FILTER_TYPE_EVENT_NAME         = 0x80000400
-	EVENT_FILTER_TYPE_STACKWALK          = 0x80001000
-	EVENT_FILTER_TYPE_STACKWALK_NAME     = 0x80002000
-	EVENT_FILTER_TYPE_STACKWALK_LEVEL_KW = 0x80004000
-)
 
 const (
 	ENABLE_TRACE_PARAMETERS_VERSION   = 1
