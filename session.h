@@ -21,7 +21,7 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, in
 int PropertyIsStruct(PTRACE_EVENT_INFO info, int i);
 int GetStartIndex(PTRACE_EVENT_INFO info, int i);
 int GetLastIndex(PTRACE_EVENT_INFO info, int i);
-ULONGLONG GetTimeStamp(PEVENT_RECORD EventRecord);
+ULONGLONG GetTimeStamp(EVENT_HEADER header);
 ULONG GetKernelTime(EVENT_HEADER header);
 ULONG GetUserTime(EVENT_HEADER header);
 

@@ -64,7 +64,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 	var params C.ENABLE_TRACE_PARAMETERS
 
 	params.Version = ENABLE_TRACE_PARAMETERS_VERSION_2
-	params.EnableProperty = EVENT_ENABLE_PROPERTY_SID
+	params.EnableProperty = EVENT_ENABLE_PROPERTY_SID // TODO include this parameter to config
 	params.SourceId = s.properties.Wnode.Guid
 	params.ControlFlags = 0
 	params.EnableFilterDesc = nil
@@ -92,8 +92,10 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 func (s *Session) StartSession() error {
 	key := atomic.AddUint64(&sessionCounter, 1)
 	sessions.Store(key, s)
+
 	status := C.StartSession(C.CString(s.Name), C.PVOID(uintptr(key)))
-	if status != 0 {
+	if syscall.Errno(status) != windows.ERROR_SUCCESS &&
+		syscall.Errno(status) != windows.ERROR_CANCELLED {
 		return fmt.Errorf("failed start session with %v", status)
 	}
 	return nil
@@ -111,7 +113,7 @@ func (s *Session) StopSession() error {
 	// If you receive this error when stopping the session, ETW will have
 	// already stopped the session before generating this error.
 	if syscall.Errno(status) != windows.ERROR_MORE_DATA {
-		return fmt.Errorf("fail to stop session with %v", status)
+		return fmt.Errorf("failed to stop session with %v", status)
 	}
 	C.free(unsafe.Pointer(s.properties))
 	return nil
@@ -119,8 +121,13 @@ func (s *Session) StopSession() error {
 
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {
-	key := int(uintptr(eventRecord.UserContext))
-	targetSession, _ := sessions.Load(key)
+	key := uint64(uintptr(eventRecord.UserContext))
+
+	targetSession, ok := sessions.Load(key)
+	if !ok {
+		return
+	}
+
 	s := targetSession.(*Session)
 
 	event, err := parseEvent(eventRecord)

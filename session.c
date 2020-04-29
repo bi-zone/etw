@@ -38,10 +38,7 @@ ULONG StartSession(char* sessionName, PVOID context) {
         return GetLastError();
     }
 
-    status = ProcessTrace(&hTrace, 1, 0, 0);
-    if (status != ERROR_SUCCESS && status != ERROR_CANCELLED) {
-        return status;
-    }
+    return ProcessTrace(&hTrace, 1, 0, 0);
 }
 
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
@@ -128,10 +125,10 @@ int GetLastIndex(PTRACE_EVENT_INFO info, int i) {
                     info->EventPropertyInfoArray[i].structType.NumOfStructMembers;
 }
 
-ULONGLONG GetTimeStamp(PEVENT_RECORD EventRecord) {
+ULONGLONG GetTimeStamp(EVENT_HEADER header) {
     ULONGLONG time;
-    time = EventRecord->EventHeader.TimeStamp.HighPart;
-    time = (time << 32) | EventRecord->EventHeader.TimeStamp.LowPart;
+    time = header.TimeStamp.HighPart;
+    time = (time << 32) | header.TimeStamp.LowPart;
     return time;
 }
 
