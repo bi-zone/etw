@@ -25,16 +25,8 @@ var (
 	sessionCounter uint64
 )
 
-func (s *Session) Error() chan error {
-	return s.errChan
-}
-
-func (s *Session) Event() chan *Event {
-	return s.eventChan
-}
-
 // NewSession creates windows trace session instance.
-func NewSession(sessionName string) (Session, error) {
+func NewSession(sessionName string, callback EventCallback) (Session, error) {
 	var hSession C.TRACEHANDLE
 	var properties C.PEVENT_TRACE_PROPERTIES
 
@@ -45,12 +37,10 @@ func NewSession(sessionName string) (Session, error) {
 	}
 
 	return Session{
+		callback:   callback,
 		hSession:   hSession,
 		properties: properties,
 		Name:       sessionName,
-
-		errChan:   make(chan error),
-		eventChan: make(chan *Event),
 	}, nil
 }
 
@@ -129,11 +119,10 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 	}
 
 	s := targetSession.(*Session)
-
-	event, err := parseEvent(eventRecord)
-	if err != nil {
-		s.errChan <- err
-	} else {
-		s.eventChan <- event
+	event := &Event{
+		EventHeader: eventHeaderToGo(eventRecord.EventHeader),
+		eventRecord: eventRecord,
 	}
+
+	s.callback(event)
 }

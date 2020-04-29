@@ -20,28 +20,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func parseEvent(eventRecord C.PEVENT_RECORD) (*Event, error) {
-	var event Event
-
-	event.EventHeader = eventHeaderToGo(eventRecord.EventHeader)
-
-	if eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
-		event.Properties[""] = C.GoString((*C.char)(eventRecord.UserData))
-		return &event, nil
-	}
-
-	event.ExtendedData = parseExtendedInfo(eventRecord)
-
-	eventProperties, err := parseEventProperties(eventRecord)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse event properties; %s", err)
-	}
-	event.Properties = eventProperties
-
-	return &event, nil
-}
-
-// parseEventHeader translates C.EventHeader structure to go structure.
+// eventHeaderToGo converts windows EVENT_HEADER structure to go structure.
 func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
 	return EventHeader{
 		ThreadId:        uint32(header.ThreadId),
@@ -55,6 +34,7 @@ func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
 	}
 }
 
+// eventDescriptorToGo converts windows EVENT_DESCRIPTOR to go structure.
 func eventDescriptorToGo(descriptor C.EVENT_DESCRIPTOR) EventDescriptor {
 	return EventDescriptor{
 		Id:      uint16(descriptor.Id),
@@ -67,14 +47,14 @@ func eventDescriptorToGo(descriptor C.EVENT_DESCRIPTOR) EventDescriptor {
 	}
 }
 
-// parseExtendedInfo parsers extended field from EVENT_RECORD structure.
-func parseExtendedInfo(record C.PEVENT_RECORD) map[string]interface{} {
-	extendedData := make(map[string]interface{}, int(record.ExtendedDataCount))
+// parseExtendedInfo parsers extended info from EVENT_RECORD structure.
+func (e *Event) ParseExtendedInfo() map[string]interface{} {
+	extendedData := make(map[string]interface{}, int(e.eventRecord.ExtendedDataCount))
 
-	for i := 0; i < int(record.ExtendedDataCount); i++ {
-		dataPtr := unsafe.Pointer(uintptr(C.GetDataPtr(record.ExtendedData, C.int(i))))
+	for i := 0; i < int(e.eventRecord.ExtendedDataCount); i++ {
+		dataPtr := unsafe.Pointer(uintptr(C.GetDataPtr(e.eventRecord.ExtendedData, C.int(i))))
 
-		switch C.GetExtType(record.ExtendedData, C.int(i)) {
+		switch C.GetExtType(e.eventRecord.ExtendedData, C.int(i)) {
 		case EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID:
 			cGUID := (C.LPGUID)(dataPtr)
 			extendedData["ActivityId"] = windowsGuidToGo(*cGUID)
@@ -102,7 +82,7 @@ func parseExtendedInfo(record C.PEVENT_RECORD) map[string]interface{} {
 
 		case EVENT_HEADER_EXT_TYPE_STACK_TRACE32:
 			stack32 := (C.PEVENT_EXTENDED_ITEM_STACK_TRACE32)(dataPtr)
-			arraySize := (int(C.GetDataSize(record.ExtendedData, C.int(i))) - 8) / 4
+			arraySize := (int(C.GetDataSize(e.eventRecord.ExtendedData, C.int(i))) - 8) / 4
 
 			address := make([]uint32, arraySize)
 			for j := 0; j < arraySize; j++ {
@@ -116,7 +96,7 @@ func parseExtendedInfo(record C.PEVENT_RECORD) map[string]interface{} {
 
 		case EVENT_HEADER_EXT_TYPE_STACK_TRACE64:
 			stack64 := (C.PEVENT_EXTENDED_ITEM_STACK_TRACE64)(dataPtr)
-			arraySize := (int(C.GetDataSize(record.ExtendedData, C.int(i))) - 8) / 8
+			arraySize := (int(C.GetDataSize(e.eventRecord.ExtendedData, C.int(i))) - 8) / 8
 
 			address := make([]uint64, arraySize)
 			for j := 0; j < arraySize; j++ {
@@ -133,6 +113,35 @@ func parseExtendedInfo(record C.PEVENT_RECORD) map[string]interface{} {
 	}
 
 	return extendedData
+}
+
+func (e *Event) ParseEventProperties() (map[string]interface{}, error) {
+	if e.eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
+		return map[string]interface{}{"": C.GoString((*C.char)(e.eventRecord.UserData))}, nil
+	}
+
+	p, err := newPropertyParser(e.eventRecord)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse event properties; %s", err)
+	}
+	defer p.close()
+
+	properties := make(map[string]interface{}, int(p.info.TopLevelPropertyCount))
+
+	for i := 0; i < int(p.info.TopLevelPropertyCount); i++ {
+		name := p.getPropertyName(i)
+		value, err := p.getPropertyValue(i)
+		if err != nil {
+			// We suppose continuing parsing is pointless. Because
+			// the success of parsing the next values depends on previous
+			// values. And if it ends with error next parsing results
+			// will be wrong.
+			return nil, fmt.Errorf("failed to parse property value %s", err)
+		}
+		properties[name] = value
+	}
+
+	return properties, nil
 }
 
 func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
@@ -156,31 +165,6 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	}
 
 	return pInfo, nil
-}
-
-func parseEventProperties(r C.PEVENT_RECORD) (map[string]interface{}, error) {
-	p, err := newPropertyParser(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse event properties; %s", err)
-	}
-	defer p.close()
-
-	properties := make(map[string]interface{}, int(p.info.TopLevelPropertyCount))
-
-	for i := 0; i < int(p.info.TopLevelPropertyCount); i++ {
-		name := p.getPropertyName(i)
-		value, err := p.getPropertyValue(i)
-		if err != nil {
-			// We suppose continuing parsing is pointless. Because
-			// the success of parsing the next values depends on previous
-			// values. And if it ends with error next parsing results
-			// will be wrong.
-			return nil, fmt.Errorf("failed to parse property value %s", err)
-		}
-		properties[name] = value
-	}
-
-	return properties, nil
 }
 
 // propertyParser is used for parsing properties from raw EVENT_RECORD structure.

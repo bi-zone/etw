@@ -14,6 +14,7 @@ import (
 )
 
 type Session struct {
+	callback   EventCallback
 	hSession   C.TRACEHANDLE
 	properties C.PEVENT_TRACE_PROPERTIES
 	Name       string
@@ -22,12 +23,13 @@ type Session struct {
 	eventChan chan *Event
 }
 
+type EventCallback func(e *Event)
+
 // Event represents parsing result from structure:
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
-	EventHeader  EventHeader
-	ExtendedData map[string]interface{}
-	Properties   map[string]interface{}
+	EventHeader EventHeader
+	eventRecord C.PEVENT_RECORD
 }
 
 // EventHeader consists common event information.

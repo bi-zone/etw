@@ -1,29 +1,23 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	etw "github.com/MashaSamoylova/tracing-session"
 	"github.com/davecgh/go-spew/spew"
 	"os"
 	"os/signal"
 	"sync"
+
+	etw "github.com/MashaSamoylova/tracing-session"
 )
 
 var wg sync.WaitGroup
 
-func processEvent(ctx context.Context, session etw.Session) {
-	for {
-		select {
-		case e := <-session.Event():
-			spew.Dump(e)
-		case err := <-session.Error():
-			panic(err)
-		case <-ctx.Done():
-			fmt.Println("Event processing is finished")
-			wg.Done()
-			return
-		}
+func callback(e *etw.Event) {
+	fmt.Println(e.EventHeader.EventDescriptor.Id)
+
+	if e.EventHeader.EventDescriptor.Id == 11 {
+		spew.Dump(e.ParseExtendedInfo())
+		spew.Dump(e.ParseEventProperties())
 	}
 }
 
@@ -33,7 +27,7 @@ func main() {
 		return
 	}
 
-	session, err := etw.NewSession("TEST-GO-GO")
+	session, err := etw.NewSession("TEST-GO-GO", callback)
 	if err != nil {
 		panic(err)
 	}
@@ -46,17 +40,10 @@ func main() {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go processEvent(ctx, session)
-
 	// Test that all goroutines are finished.
 	defer func() {
 		wg.Wait()
 		fmt.Println("Session is closed")
-
-		wg.Add(1)
-		cancel()
-		wg.Wait()
 	}()
 
 	wg.Add(1)
