@@ -3,17 +3,14 @@ package tracing_session
 /*
 #cgo LDFLAGS: -ltdh
 
-#undef _WIN32_WINNT
-#define _WIN32_WINNT _WIN32_WINNT_WIN7
-
 #include "session.h"
 #include "Sddl.h" // for sid converting
 */
 import "C"
 import (
 	"fmt"
+	"math"
 	"strconv"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -23,14 +20,14 @@ import (
 // eventHeaderToGo converts windows EVENT_HEADER structure to go structure.
 func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
 	return EventHeader{
-		ThreadId:        uint32(header.ThreadId),
-		ProcessId:       uint32(header.ProcessId),
-		TimeStamp:       stampToTime(uint64(C.GetTimeStamp(header))),
-		EventDescriptor: eventDescriptorToGo(header.EventDescriptor),
-		ProviderID:      windowsGuidToGo(header.ProviderId),
-		KernelTime:      uint32(C.GetKernelTime(header)),
-		UserTime:        uint32(C.GetKernelTime(header)),
-		ActivityId:      windowsGuidToGo(header.ActivityId),
+		ThreadId:   uint32(header.ThreadId),
+		ProcessId:  uint32(header.ProcessId),
+		TimeStamp:  stampToTime(C.GetTimeStamp(header)),
+		Descriptor: eventDescriptorToGo(header.EventDescriptor),
+		ProviderID: windowsGuidToGo(header.ProviderId),
+		KernelTime: uint32(C.GetKernelTime(header)),
+		UserTime:   uint32(C.GetUserTime(header)),
+		ActivityId: windowsGuidToGo(header.ActivityId),
 	}
 }
 
@@ -151,7 +148,7 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	// get structure size
 	status := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 
-	if syscall.Errno(status) == windows.ERROR_INSUFFICIENT_BUFFER {
+	if windows.Errno(status) == windows.ERROR_INSUFFICIENT_BUFFER {
 		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.ulonglong(bufferSize)))
 		if pInfo == nil {
 			return nil, fmt.Errorf("failed to allocate memory for event info (size=%v)", bufferSize)
@@ -160,7 +157,7 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 		status = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 	}
 
-	if syscall.Errno(status) != windows.ERROR_SUCCESS {
+	if windows.Errno(status) != windows.ERROR_SUCCESS {
 		return nil, fmt.Errorf("TdhGetEventInformation failed with %v", status)
 	}
 
@@ -257,7 +254,7 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 	var propertyLength C.int
 	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
 
-	if syscall.Errno(status) != windows.ERROR_SUCCESS {
+	if windows.Errno(status) != windows.ERROR_SUCCESS {
 		return "", fmt.Errorf("failed to get property length with %v", status)
 	}
 
@@ -279,7 +276,7 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 		uintptr(unsafe.Pointer(&userDataConsumed)),
 	)
 
-	if syscall.Errno(r0) != windows.ERROR_INSUFFICIENT_BUFFER {
+	if windows.Errno(r0) != windows.ERROR_INSUFFICIENT_BUFFER {
 		return "", fmt.Errorf("failed to format event property with %v", r0)
 	}
 
@@ -303,7 +300,7 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 		uintptr(unsafe.Pointer(&userDataConsumed)),
 	)
 
-	if syscall.Errno(r0) != windows.ERROR_SUCCESS {
+	if windows.Errno(r0) != windows.ERROR_SUCCESS {
 		return "", fmt.Errorf("failed to format event property with %v", r0)
 	}
 
@@ -317,11 +314,11 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]b
 	mapName := C.GetMapName(info, C.int(index))
 	status := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
 
-	if syscall.Errno(status) == windows.ERROR_NOT_FOUND {
+	if windows.Errno(status) == windows.ERROR_NOT_FOUND {
 		return nil, nil
 	}
 
-	if syscall.Errno(status) != windows.ERROR_INSUFFICIENT_BUFFER {
+	if windows.Errno(status) != windows.ERROR_INSUFFICIENT_BUFFER {
 		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
 	}
 
@@ -332,13 +329,14 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]b
 		(C.PEVENT_MAP_INFO)(unsafe.Pointer(&mapInfo[0])),
 		&mapSize)
 
-	if syscall.Errno(status) != windows.ERROR_SUCCESS {
+	if windows.Errno(status) != windows.ERROR_SUCCESS {
 		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
 	}
 
 	return mapInfo, nil
 }
 
+// TODO: What will happen if we just cast the C type to the Go-one?
 func windowsGuidToGo(guid C.GUID) windows.GUID {
 	var data4 [8]byte
 	for i := range data4 {
@@ -353,10 +351,13 @@ func windowsGuidToGo(guid C.GUID) windows.GUID {
 	}
 }
 
-func stampToTime(stamp uint64) time.Time {
-	stamp -= 116444736000000000
-	stamp *= 100
-	return time.Unix(0, int64(stamp)).UTC()
+// stampToTime translates FileTime to a golang time. Same as in standard packages.
+func stampToTime(quadPart C.LONGLONG) time.Time {
+	ft := windows.Filetime{
+		HighDateTime: uint32(quadPart >> 32),
+		LowDateTime:  uint32(quadPart & math.MaxUint32),
+	}
+	return time.Unix(0, ft.Nanoseconds())
 }
 
 // Creates UTF16 string from raw parts.
@@ -372,5 +373,5 @@ func createUTF16String(ptr uintptr, len int) string {
 		return ""
 	}
 	bytes := (*[1 << 29]uint16)(unsafe.Pointer(ptr))[:len:len]
-	return syscall.UTF16ToString(bytes)
+	return windows.UTF16ToString(bytes)
 }

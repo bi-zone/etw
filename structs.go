@@ -1,9 +1,6 @@
 package tracing_session
 
 /*
-#undef _WIN32_WINNT
-#define _WIN32_WINNT _WIN32_WINNT_WIN7
-
 #include "session.h"
 */
 import "C"
@@ -14,13 +11,11 @@ import (
 )
 
 type Session struct {
+	Name string
+
 	callback   EventCallback
 	hSession   C.TRACEHANDLE
 	properties C.PEVENT_TRACE_PROPERTIES
-	Name       string
-
-	errChan   chan error
-	eventChan chan *Event
 }
 
 type EventCallback func(e *Event)
@@ -28,23 +23,23 @@ type EventCallback func(e *Event)
 // Event represents parsing result from structure:
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
-	EventHeader EventHeader
+	Header      EventHeader
 	eventRecord C.PEVENT_RECORD
 }
 
 // EventHeader consists common event information.
 type EventHeader struct {
-	ThreadId        uint32
-	ProcessId       uint32
-	TimeStamp       time.Time
-	EventDescriptor EventDescriptor
-	ProviderID      windows.GUID
-	KernelTime      uint32
-	UserTime        uint32
-	ActivityId      windows.GUID
+	ThreadId   uint32
+	ProcessId  uint32
+	TimeStamp  time.Time
+	Descriptor EventDescriptor
+	ProviderID windows.GUID
+	KernelTime uint32
+	UserTime   uint32
+	ActivityId windows.GUID
 }
 
-// Go-analog of EVENT_DESCRIPTOR structure.
+// EventDescriptor is Go-analog of EVENT_DESCRIPTOR structure.
 // https://docs.microsoft.com/ru-ru/windows/win32/api/evntprov/ns-evntprov-event_descriptor
 type EventDescriptor struct {
 	Id      uint16
@@ -57,11 +52,10 @@ type EventDescriptor struct {
 }
 
 // windows constants
+// TODO: drop unnecessary, wrap necessary
 
+// TODO: GO-style names for flags with appropriate description?
 const (
-	ENABLE_TRACE_PARAMETERS_VERSION   = 1
-	ENABLE_TRACE_PARAMETERS_VERSION_2 = 2
-
 	EVENT_ENABLE_PROPERTY_SID               = 0x001
 	EVENT_ENABLE_PROPERTY_TS_ID             = 0x002
 	EVENT_ENABLE_PROPERTY_STACK_TRACE       = 0x004

@@ -13,9 +13,9 @@ import (
 var wg sync.WaitGroup
 
 func callback(e *etw.Event) {
-	fmt.Println(e.EventHeader.EventDescriptor.Id)
+	fmt.Println(e.Header.Descriptor.Id)
 
-	if e.EventHeader.EventDescriptor.Id == 11 {
+	if e.Header.Descriptor.Id == 11 {
 		spew.Dump(e.ParseExtendedInfo())
 		spew.Dump(e.ParseEventProperties())
 	}

@@ -1,9 +1,7 @@
 #include "session.h"
-#include "_cgo_export.h"
 
+// TODO: why not to do it in go?
 ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, char* sessionName) {
-    *properties = NULL;
-
     const size_t buffSize = sizeof(EVENT_TRACE_PROPERTIES) + strlen(sessionName) + 1;
     *properties = calloc(buffSize, sizeof(char));
     (*properties)->Wnode.BufferSize = buffSize;
@@ -12,64 +10,45 @@ ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, 
     (*properties)->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
     (*properties)->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
 
+    // TODO: is it StartTraceW or StartTraceA?
     return StartTrace(hSession, sessionName, *properties);
 };
 
-ULONG StartSession(char* sessionName, PVOID context) {
-    ULONG status = ERROR_SUCCESS;
-    EVENT_TRACE_LOGFILE trace;
-    TRACEHANDLE hTrace = 0;
-
-    ZeroMemory(&trace, sizeof(EVENT_TRACE_LOGFILE));
-    trace.LogFileName = NULL;
+ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb) {
+    EVENT_TRACE_LOGFILE trace = {0};
     trace.LoggerName = sessionName;
-    trace.CurrentTime = 0;
-    trace.BuffersRead = 0;
-    trace.BufferSize = 0;
-    trace.Filled = 0;
-    trace.EventsLost = 0;
     trace.Context = context;
     trace.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
-    trace.EventRecordCallback = (PEVENT_RECORD_CALLBACK)(handleEvent);
+    trace.EventRecordCallback = cb;
 
-    hTrace = OpenTrace(&trace);
-
+    TRACEHANDLE hTrace = OpenTrace(&trace);
     if (INVALID_PROCESSTRACE_HANDLE == hTrace) {
         return GetLastError();
     }
 
+    // TODO: named constants.
     return ProcessTrace(&hTrace, 1, 0, 0);
-}
-
-ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
-    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
-}
-
-
-USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
-    return info->EventPropertyInfoArray[i].nonStructType.InType;
-}
-
-USHORT GetOutType(PTRACE_EVENT_INFO info, int i) {
-    return info->EventPropertyInfoArray[i].nonStructType.OutType;
 }
 
 DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength) {
     DWORD status = ERROR_SUCCESS;
-    PROPERTY_DATA_DESCRIPTOR DataDescriptor;
-    DWORD PropertySize = 0;
 
     // If the property is a binary blob and is defined in a manifest, the property can
     // specify the blob's size or it can point to another property that defines the
     // blob's size. The PropertyParamLength flag tells you where the blob's size is defined.
 
     if ((pInfo->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
-        DWORD Length = 0;  // Expects the length to be defined by a UINT16 or UINT32
         DWORD j = pInfo->EventPropertyInfoArray[i].lengthPropertyIndex;
-        ZeroMemory(&DataDescriptor, sizeof(PROPERTY_DATA_DESCRIPTOR));
+
+        PROPERTY_DATA_DESCRIPTOR DataDescriptor = {0};
         DataDescriptor.PropertyName = (ULONGLONG)((PBYTE)(pInfo) + pInfo->EventPropertyInfoArray[j].NameOffset);
         DataDescriptor.ArrayIndex = ULONG_MAX;
+
+        // TODO: handle statuses properly.
+        DWORD PropertySize = 0;
         status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
+
+        DWORD Length = 0;  // Expects the length to be defined by a UINT16 or UINT32 // TODO: just pass PropertyLength itself?
         status = TdhGetProperty(pEvent, 0, NULL, 1, &DataDescriptor, PropertySize, (PBYTE)&Length);
         *PropertyLength = (int)Length;
     }
@@ -83,6 +62,7 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, in
             // is IPAddrV6, you must set the PropertyLength variable yourself because the
             // EVENT_PROPERTY_INFO.length field will be zero.
 
+            // TODO: named constants
             if (14 == pInfo->EventPropertyInfoArray[i].nonStructType.InType &&
                 24 == pInfo->EventPropertyInfoArray[i].nonStructType.OutType) {
                 *PropertyLength = (int)sizeof(IN6_ADDR);
@@ -93,6 +73,7 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, in
                 *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
             }
             else {
+                // TODO: handle error properly.
                 wprintf(L"Unexpected length of 0 for intype %d and outtype %d\n",
                     pInfo->EventPropertyInfoArray[i].nonStructType.InType,
                     pInfo->EventPropertyInfoArray[i].nonStructType.OutType);
@@ -103,9 +84,28 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, in
         }
     }
 
+// TODO: is it ok that there is no cleanup? Change to naked return if so?
 cleanup:
 
     return status;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// All the function below is a helpers for go code to handle dynamic arrays and unnamed unions.
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+
+ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
+    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
+}
+
+
+USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].nonStructType.InType;
+}
+
+USHORT GetOutType(PTRACE_EVENT_INFO info, int i) {
+    return info->EventPropertyInfoArray[i].nonStructType.OutType;
 }
 
 LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i) {
@@ -125,11 +125,8 @@ int GetLastIndex(PTRACE_EVENT_INFO info, int i) {
                     info->EventPropertyInfoArray[i].structType.NumOfStructMembers;
 }
 
-ULONGLONG GetTimeStamp(EVENT_HEADER header) {
-    ULONGLONG time;
-    time = header.TimeStamp.HighPart;
-    time = (time << 32) | header.TimeStamp.LowPart;
-    return time;
+LONGLONG GetTimeStamp(EVENT_HEADER header) {
+    return header.TimeStamp.QuadPart;
 }
 
 ULONG GetKernelTime(EVENT_HEADER header) {
@@ -151,7 +148,6 @@ ULONGLONG GetDataPtr(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i) {
 USHORT GetDataSize(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i) {
      return extData[i].DataSize;
 }
-
 
 ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j) {
     return trace32->Address[j];
