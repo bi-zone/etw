@@ -251,16 +251,14 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 		pMapInfo = uintptr(unsafe.Pointer(&mapInfo[0]))
 	}
 
-	var propertyLength C.int
+	var propertyLength C.uint
 	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
-
 	if windows.Errno(status) != windows.ERROR_SUCCESS {
 		return "", fmt.Errorf("failed to get property length with %v", status)
 	}
 
 	var formattedDataSize C.int
 	var userDataConsumed C.int
-
 	// We make the first call to get the size of formatted data.
 	r0, _, _ := tdhFormatProperty.Call(
 		uintptr(unsafe.Pointer(p.record)),
@@ -270,7 +268,7 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
 		p.endData-p.data,
-		uintptr(p.data),
+		p.data,
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		0,
 		uintptr(unsafe.Pointer(&userDataConsumed)),
@@ -294,7 +292,7 @@ func (p *propertyParser) parseSimpleType(i int) (string, error) {
 		uintptr(C.GetOutType(p.info, C.int(i))),
 		uintptr(propertyLength),
 		p.endData-p.data,
-		uintptr(p.data),
+		p.data,
 		uintptr(unsafe.Pointer(&formattedDataSize)),
 		uintptr(unsafe.Pointer(&formattedData[0])),
 		uintptr(unsafe.Pointer(&userDataConsumed)),

@@ -30,64 +30,50 @@ ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb) 
     return ProcessTrace(&hTrace, 1, 0, 0);
 }
 
-DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength) {
-    DWORD status = ERROR_SUCCESS;
-
-    // If the property is a binary blob and is defined in a manifest, the property can
-    // specify the blob's size or it can point to another property that defines the
+// GetPropertyLength returns an associated length of the @j-th property of @pInfo.
+// If the length is available, retrieve it here. In some cases, the length is 0.
+// This can signify that we are dealing with a variable length field such as a structure
+// or a string.
+DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UINT32* PropertyLength) {
+    // If the property is a binary blob it can point to another property that defines the
     // blob's size. The PropertyParamLength flag tells you where the blob's size is defined.
-
     if ((pInfo->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
-        DWORD j = pInfo->EventPropertyInfoArray[i].lengthPropertyIndex;
-
         PROPERTY_DATA_DESCRIPTOR DataDescriptor = {0};
-        DataDescriptor.PropertyName = (ULONGLONG)((PBYTE)(pInfo) + pInfo->EventPropertyInfoArray[j].NameOffset);
+        DataDescriptor.PropertyName = GetPropertyName(pInfo, pInfo->EventPropertyInfoArray[i].lengthPropertyIndex);
         DataDescriptor.ArrayIndex = ULONG_MAX;
 
-        // TODO: handle statuses properly.
         DWORD PropertySize = 0;
-        status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
+        ULONG status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
+        if (status != ERROR_SUCCESS) {
+            return status;
+        }
 
-        DWORD Length = 0;  // Expects the length to be defined by a UINT16 or UINT32 // TODO: just pass PropertyLength itself?
+        DWORD Length = 0;
         status = TdhGetProperty(pEvent, 0, NULL, 1, &DataDescriptor, PropertySize, (PBYTE)&Length);
-        *PropertyLength = (int)Length;
-    }
-    else {
-        if (pInfo->EventPropertyInfoArray[i].length > 0) {
-            *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
+        if (status != ERROR_SUCCESS) {
+            return status;
         }
-        else {
-            // If the property is a binary blob and is defined in a MOF class, the extension
-            // qualifier is used to determine the size of the blob. However, if the extension
-            // is IPAddrV6, you must set the PropertyLength variable yourself because the
-            // EVENT_PROPERTY_INFO.length field will be zero.
-
-            // TODO: named constants
-            if (14 == pInfo->EventPropertyInfoArray[i].nonStructType.InType &&
-                24 == pInfo->EventPropertyInfoArray[i].nonStructType.OutType) {
-                *PropertyLength = (int)sizeof(IN6_ADDR);
-            }
-            else if (1 == pInfo->EventPropertyInfoArray[i].nonStructType.InType ||
-                     2 == pInfo->EventPropertyInfoArray[i].nonStructType.InType ||
-                     (pInfo->EventPropertyInfoArray[i].Flags & PropertyStruct) == PropertyStruct) {
-                *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
-            }
-            else {
-                // TODO: handle error properly.
-                wprintf(L"Unexpected length of 0 for intype %d and outtype %d\n",
-                    pInfo->EventPropertyInfoArray[i].nonStructType.InType,
-                    pInfo->EventPropertyInfoArray[i].nonStructType.OutType);
-
-                status = ERROR_EVT_INVALID_EVENT_DATA;
-                goto cleanup;
-            }
-        }
+        *PropertyLength = Length;
+        return ERROR_SUCCESS;
     }
 
-// TODO: is it ok that there is no cleanup? Change to naked return if so?
-cleanup:
+    // If the property is an IP V6 address, you must set the PropertyLength parameter to the size
+    // of the IN6_ADDR structure:
+    // https://docs.microsoft.com/en-us/windows/win32/api/tdh/nf-tdh-tdhformatproperty#remarks
+    USHORT inType = pInfo->EventPropertyInfoArray[i].nonStructType.InType;
+    USHORT outType = pInfo->EventPropertyInfoArray[i].nonStructType.OutType;
+    USHORT TDH_INTYPE_BINARY = 14; // Undefined in MinGW.
+    USHORT TDH_OUTTYPE_IPV6 = 24; // Undefined in MinGW.
+    if (TDH_INTYPE_BINARY == inType && TDH_OUTTYPE_IPV6 == outType) {
+        *PropertyLength = sizeof(IN6_ADDR);
+        return ERROR_SUCCESS;
+    }
 
-    return status;
+    // If no special cases handled -- just return the length defined if the info.
+    // In some cases, the length is 0. This can signify that we are dealing with a variable
+    // length field such as a structure or a string.
+    *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
+    return ERROR_SUCCESS;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -98,7 +84,6 @@ cleanup:
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
     return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
-
 
 USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].nonStructType.InType;
