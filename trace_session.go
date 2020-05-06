@@ -183,3 +183,30 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 		eventRecord: eventRecord,
 	})
 }
+
+// eventHeaderToGo converts windows EVENT_HEADER structure to go structure.
+func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
+	return EventHeader{
+		EventDescriptor: eventDescriptorToGo(header.EventDescriptor),
+		ThreadId:        uint32(header.ThreadId),
+		ProcessId:       uint32(header.ProcessId),
+		KernelTime:      uint32(C.GetKernelTime(header)),
+		UserTime:        uint32(C.GetUserTime(header)),
+		TimeStamp:       stampToTime(C.GetTimeStamp(header)),
+		ProviderID:      windowsGuidToGo(header.ProviderId),
+		ActivityId:      windowsGuidToGo(header.ActivityId),
+	}
+}
+
+// eventDescriptorToGo converts windows EVENT_DESCRIPTOR to go structure.
+func eventDescriptorToGo(descriptor C.EVENT_DESCRIPTOR) EventDescriptor {
+	return EventDescriptor{
+		Id:      uint16(descriptor.Id),
+		Version: uint8(descriptor.Version),
+		Channel: uint8(descriptor.Channel),
+		Level:   uint8(descriptor.Level),
+		OpCode:  uint8(descriptor.Opcode),
+		Task:    uint16(descriptor.Task),
+		Keyword: uint64(descriptor.Keyword),
+	}
+}

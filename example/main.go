@@ -1,8 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,22 +12,31 @@ import (
 
 var wg sync.WaitGroup
 
-func callback(e *etw.Event) {
-	fmt.Println(e.Header.Descriptor.Id)
-
-	if e.Header.Descriptor.Id == 11 {
-		spew.Dump(e.ParseExtendedInfo())
-		spew.Dump(e.ParseEventProperties())
-	}
-}
-
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage ./trace-session.exe <providerGUID>")
 		return
 	}
 
-	session, err := etw.NewSession("TEST-GO-GO", callback)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	session, err := etw.NewSession("TEST-GO-GO", func(e *etw.Event) {
+		fmt.Println(e.Header.Id)
+		if e.Header.Id != 11 {
+			return
+		}
+
+		ext := e.ExtendedInfo()
+		if ext.UserSID != nil {
+			acc, _, _, _ := ext.UserSID.LookupAccount("")
+			fmt.Printf("Event from %s -- %s", ext.UserSID.String(), acc)
+		}
+		_ = enc.Encode(ext)
+		if data, err := e.EventProperties(); err == nil {
+			_ = enc.Encode(data)
+		}
+	})
 	if err != nil {
 		panic(err)
 	}
