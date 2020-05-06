@@ -10,16 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type Session struct {
-	Name string
-
-	callback   EventCallback
-	hSession   C.TRACEHANDLE
-	properties C.PEVENT_TRACE_PROPERTIES
-}
-
-type EventCallback func(e *Event)
-
 // Event represents parsing result from structure:
 // https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
 type Event struct {
