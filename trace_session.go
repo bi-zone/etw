@@ -79,7 +79,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 	ret := C.EnableTraceEx2(
 		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
-		EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+		C.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
 		TRACE_LEVEL_VERBOSE, // TODO: configure or switch to C definitions
 		0,                   // TODO: configure keywords matchers
 		0,
@@ -96,9 +96,6 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 // N.B. Blocking!
 func (s *Session) StartSession() error {
 	s.cgoKey = newSessionKey(s)
-	runtime.SetFinalizer(s, func(s *Session) {
-		freeSession(s.cgoKey)
-	})
 
 	ret := C.StartSession(
 		C.CString(s.Name),
@@ -107,6 +104,9 @@ func (s *Session) StartSession() error {
 	)
 	switch status := windows.Errno(ret); status {
 	case windows.ERROR_SUCCESS, windows.ERROR_CANCELLED:
+		runtime.SetFinalizer(s, func(s *Session) {
+			freeSession(s.cgoKey)
+		})
 		return nil
 	default:
 		freeSession(s.cgoKey)
@@ -126,7 +126,7 @@ func (s *Session) StopSession() error {
 		s.hSession,
 		nil, // You must specify SessionName if SessionHandle is NULL.
 		s.properties,
-		EVENT_TRACE_CONTROL_STOP,
+		C.EVENT_TRACE_CONTROL_STOP,
 	)
 
 	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
@@ -141,6 +141,7 @@ func (s *Session) StopSession() error {
 
 	// TODO: free even on error?
 	freeSession(s.cgoKey)
+	runtime.SetFinalizer(s, nil)
 	C.free(unsafe.Pointer(s.properties))
 	return nil
 }
@@ -171,7 +172,7 @@ func freeSession(key uintptr) {
 //
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {
-	key := uint64(uintptr(eventRecord.UserContext))
+	key := uintptr(eventRecord.UserContext)
 	targetSession, ok := sessions.Load(key)
 	if !ok {
 		return
