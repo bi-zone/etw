@@ -9,7 +9,6 @@
 #include <tdh.h>
 #include <in6addr.h>
 
-ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, char* sessionName);
 ULONG StartSession(char* sessionName, PVOID context);
 
 // Helpers for event property parsing.

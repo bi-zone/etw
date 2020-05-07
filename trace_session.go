@@ -26,12 +26,30 @@ var (
 )
 
 // NewSession creates windows trace session instance.
-func NewSession(sessionName string, callback EventCallback) (Session, error) {
+func NewSession(sessionName string, logFileName string, callback EventCallback) (Session, error) {
 	var hSession C.TRACEHANDLE
-	var properties C.PEVENT_TRACE_PROPERTIES
 
-	status := C.CreateSession(&hSession, &properties, C.CString(sessionName))
+	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
+	bufSize :=  eventPropertiesSize + len(sessionName) + len(logFileName) + 2 // for null symbols
 
+	p := make([]byte, bufSize)
+
+	properties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&p[0]))
+	properties.Wnode.BufferSize = C.ulong(bufSize)
+	properties.Wnode.ClientContext = 1
+	properties.Wnode.Flags = C.WNODE_FLAG_TRACED_GUID
+	properties.LogFileMode = C.EVENT_TRACE_REAL_TIME_MODE | C.EVENT_TRACE_FILE_MODE_SEQUENTIAL
+	properties.MaximumFileSize = 10 // mb TODO include this to config
+	properties.LoggerNameOffset = C.ulong(eventPropertiesSize)
+	properties.LogFileNameOffset = C.ulong(eventPropertiesSize + len(sessionName) + 1) // include null from session name string
+
+	i := int(properties.LogFileNameOffset)
+	for _, s := range logFileName {
+		p[i] = byte(s)
+		i++
+	}
+
+	status := C.StartTrace(&hSession, C.CString(sessionName), properties)
 	if syscall.Errno(status) != windows.ERROR_SUCCESS {
 		return Session{}, fmt.Errorf("failed to create session with %v", status)
 	}
@@ -39,7 +57,7 @@ func NewSession(sessionName string, callback EventCallback) (Session, error) {
 	return Session{
 		callback:   callback,
 		hSession:   hSession,
-		properties: properties,
+		properties: p,
 		Name:       sessionName,
 	}, nil
 }
@@ -55,7 +73,6 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 
 	params.Version = ENABLE_TRACE_PARAMETERS_VERSION_2
 	params.EnableProperty = EVENT_ENABLE_PROPERTY_SID // TODO include this parameter to config
-	params.SourceId = s.properties.Wnode.Guid
 	params.ControlFlags = 0
 	params.EnableFilterDesc = nil
 	params.FilterDescCount = 0
@@ -96,7 +113,7 @@ func (s *Session) StopSession() error {
 	status := C.ControlTraceW(
 		s.hSession,
 		(*C.ushort)(unsafe.Pointer(nil)),
-		s.properties,
+		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.properties[0])),
 		EVENT_TRACE_CONTROL_STOP)
 
 	// Note from windows documentation:
@@ -105,7 +122,6 @@ func (s *Session) StopSession() error {
 	if syscall.Errno(status) != windows.ERROR_MORE_DATA {
 		return fmt.Errorf("failed to stop session with %v", status)
 	}
-	C.free(unsafe.Pointer(s.properties))
 	return nil
 }
 

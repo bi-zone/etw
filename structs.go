@@ -16,7 +16,7 @@ import (
 type Session struct {
 	callback   EventCallback
 	hSession   C.TRACEHANDLE
-	properties C.PEVENT_TRACE_PROPERTIES
+	properties []byte
 	Name       string
 
 	errChan   chan error

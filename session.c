@@ -1,27 +1,12 @@
 #include "session.h"
 #include "_cgo_export.h"
 
-ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, char* sessionName) {
-    *properties = NULL;
-
-    const size_t buffSize = sizeof(EVENT_TRACE_PROPERTIES) + strlen(sessionName) + 1;
-    *properties = calloc(buffSize, sizeof(char));
-    (*properties)->Wnode.BufferSize = buffSize;
-    (*properties)->Wnode.ClientContext = 1;
-    (*properties)->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
-    (*properties)->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
-    (*properties)->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-
-    return StartTrace(hSession, sessionName, *properties);
-};
-
 ULONG StartSession(char* sessionName, PVOID context) {
     ULONG status = ERROR_SUCCESS;
     EVENT_TRACE_LOGFILE trace;
     TRACEHANDLE hTrace = 0;
 
     ZeroMemory(&trace, sizeof(EVENT_TRACE_LOGFILE));
-    trace.LogFileName = NULL;
     trace.LoggerName = sessionName;
     trace.CurrentTime = 0;
     trace.BuffersRead = 0;
@@ -33,6 +18,8 @@ ULONG StartSession(char* sessionName, PVOID context) {
     trace.EventRecordCallback = (PEVENT_RECORD_CALLBACK)(handleEvent);
 
     hTrace = OpenTrace(&trace);
+
+    printf("%d\n", hTrace);
 
     if (INVALID_PROCESSTRACE_HANDLE == hTrace) {
         return GetLastError();
