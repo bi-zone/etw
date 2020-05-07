@@ -1,6 +1,9 @@
+// MinGW headers are always restricted to the lowest possible windows wersion,
+// so specify Win7+ manually.
 #undef _WIN32_WINNT
 #define _WIN32_WINNT _WIN32_WINNT_WIN7
 
+// TODO: Really all of them here?
 #include <windows.h>
 #include <stdio.h>
 #include <evntcons.h>
@@ -9,18 +12,18 @@
 #include <tdh.h>
 #include <in6addr.h>
 
-ULONG StartSession(char* sessionName, PVOID context);
+ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb);
 
 // Helpers for event property parsing.
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info, int index);
 USHORT GetInType(PTRACE_EVENT_INFO info, int index);
 USHORT GetOutType(PTRACE_EVENT_INFO info, int index);
 LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i);
-DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength);
+DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UINT32* PropertyLength);
 int PropertyIsStruct(PTRACE_EVENT_INFO info, int i);
 int GetStartIndex(PTRACE_EVENT_INFO info, int i);
 int GetLastIndex(PTRACE_EVENT_INFO info, int i);
-ULONGLONG GetTimeStamp(EVENT_HEADER header);
+LONGLONG GetTimeStamp(EVENT_HEADER header);
 ULONG GetKernelTime(EVENT_HEADER header);
 ULONG GetUserTime(EVENT_HEADER header);
 

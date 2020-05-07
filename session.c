@@ -1,37 +1,76 @@
 #include "session.h"
-#include "_cgo_export.h"
 
-ULONG StartSession(char* sessionName, PVOID context) {
-    ULONG status = ERROR_SUCCESS;
-    EVENT_TRACE_LOGFILE trace;
-    TRACEHANDLE hTrace = 0;
 
-    ZeroMemory(&trace, sizeof(EVENT_TRACE_LOGFILE));
+ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb) {
+    EVENT_TRACE_LOGFILE trace = {0};
     trace.LoggerName = sessionName;
-    trace.CurrentTime = 0;
-    trace.BuffersRead = 0;
-    trace.BufferSize = 0;
-    trace.Filled = 0;
-    trace.EventsLost = 0;
     trace.Context = context;
     trace.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
-    trace.EventRecordCallback = (PEVENT_RECORD_CALLBACK)(handleEvent);
+    trace.EventRecordCallback = cb;
 
-    hTrace = OpenTrace(&trace);
-
-    printf("%d\n", hTrace);
-
+    TRACEHANDLE hTrace = OpenTrace(&trace);
     if (INVALID_PROCESSTRACE_HANDLE == hTrace) {
         return GetLastError();
     }
 
+    // TODO: named constants.
     return ProcessTrace(&hTrace, 1, 0, 0);
 }
+
+// GetPropertyLength returns an associated length of the @j-th property of @pInfo.
+// If the length is available, retrieve it here. In some cases, the length is 0.
+// This can signify that we are dealing with a variable length field such as a structure
+// or a string.
+DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UINT32* PropertyLength) {
+    // If the property is a binary blob it can point to another property that defines the
+    // blob's size. The PropertyParamLength flag tells you where the blob's size is defined.
+    if ((pInfo->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
+        PROPERTY_DATA_DESCRIPTOR DataDescriptor = {0};
+        DataDescriptor.PropertyName = GetPropertyName(pInfo, pInfo->EventPropertyInfoArray[i].lengthPropertyIndex);
+        DataDescriptor.ArrayIndex = ULONG_MAX;
+
+        DWORD PropertySize = 0;
+        ULONG status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
+        if (status != ERROR_SUCCESS) {
+            return status;
+        }
+
+        DWORD Length = 0;
+        status = TdhGetProperty(pEvent, 0, NULL, 1, &DataDescriptor, PropertySize, (PBYTE)&Length);
+        if (status != ERROR_SUCCESS) {
+            return status;
+        }
+        *PropertyLength = Length;
+        return ERROR_SUCCESS;
+    }
+
+    // If the property is an IP V6 address, you must set the PropertyLength parameter to the size
+    // of the IN6_ADDR structure:
+    // https://docs.microsoft.com/en-us/windows/win32/api/tdh/nf-tdh-tdhformatproperty#remarks
+    USHORT inType = pInfo->EventPropertyInfoArray[i].nonStructType.InType;
+    USHORT outType = pInfo->EventPropertyInfoArray[i].nonStructType.OutType;
+    USHORT TDH_INTYPE_BINARY = 14; // Undefined in MinGW.
+    USHORT TDH_OUTTYPE_IPV6 = 24; // Undefined in MinGW.
+    if (TDH_INTYPE_BINARY == inType && TDH_OUTTYPE_IPV6 == outType) {
+        *PropertyLength = sizeof(IN6_ADDR);
+        return ERROR_SUCCESS;
+    }
+
+    // If no special cases handled -- just return the length defined if the info.
+    // In some cases, the length is 0. This can signify that we are dealing with a variable
+    // length field such as a structure or a string.
+    *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
+    return ERROR_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// All the function below is a helpers for go code to handle dynamic arrays and unnamed unions.
+///////////////////////////////////////////////////////////////////////////////////////////////
+
 
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
     return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
-
 
 USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].nonStructType.InType;
@@ -39,60 +78,6 @@ USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
 
 USHORT GetOutType(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].nonStructType.OutType;
-}
-
-DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, int* PropertyLength) {
-    DWORD status = ERROR_SUCCESS;
-    PROPERTY_DATA_DESCRIPTOR DataDescriptor;
-    DWORD PropertySize = 0;
-
-    // If the property is a binary blob and is defined in a manifest, the property can
-    // specify the blob's size or it can point to another property that defines the
-    // blob's size. The PropertyParamLength flag tells you where the blob's size is defined.
-
-    if ((pInfo->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
-        DWORD Length = 0;  // Expects the length to be defined by a UINT16 or UINT32
-        DWORD j = pInfo->EventPropertyInfoArray[i].lengthPropertyIndex;
-        ZeroMemory(&DataDescriptor, sizeof(PROPERTY_DATA_DESCRIPTOR));
-        DataDescriptor.PropertyName = (ULONGLONG)((PBYTE)(pInfo) + pInfo->EventPropertyInfoArray[j].NameOffset);
-        DataDescriptor.ArrayIndex = ULONG_MAX;
-        status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
-        status = TdhGetProperty(pEvent, 0, NULL, 1, &DataDescriptor, PropertySize, (PBYTE)&Length);
-        *PropertyLength = (int)Length;
-    }
-    else {
-        if (pInfo->EventPropertyInfoArray[i].length > 0) {
-            *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
-        }
-        else {
-            // If the property is a binary blob and is defined in a MOF class, the extension
-            // qualifier is used to determine the size of the blob. However, if the extension
-            // is IPAddrV6, you must set the PropertyLength variable yourself because the
-            // EVENT_PROPERTY_INFO.length field will be zero.
-
-            if (14 == pInfo->EventPropertyInfoArray[i].nonStructType.InType &&
-                24 == pInfo->EventPropertyInfoArray[i].nonStructType.OutType) {
-                *PropertyLength = (int)sizeof(IN6_ADDR);
-            }
-            else if (1 == pInfo->EventPropertyInfoArray[i].nonStructType.InType ||
-                     2 == pInfo->EventPropertyInfoArray[i].nonStructType.InType ||
-                     (pInfo->EventPropertyInfoArray[i].Flags & PropertyStruct) == PropertyStruct) {
-                *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
-            }
-            else {
-                wprintf(L"Unexpected length of 0 for intype %d and outtype %d\n",
-                    pInfo->EventPropertyInfoArray[i].nonStructType.InType,
-                    pInfo->EventPropertyInfoArray[i].nonStructType.OutType);
-
-                status = ERROR_EVT_INVALID_EVENT_DATA;
-                goto cleanup;
-            }
-        }
-    }
-
-cleanup:
-
-    return status;
 }
 
 LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i) {
@@ -112,11 +97,8 @@ int GetLastIndex(PTRACE_EVENT_INFO info, int i) {
                     info->EventPropertyInfoArray[i].structType.NumOfStructMembers;
 }
 
-ULONGLONG GetTimeStamp(EVENT_HEADER header) {
-    ULONGLONG time;
-    time = header.TimeStamp.HighPart;
-    time = (time << 32) | header.TimeStamp.LowPart;
-    return time;
+LONGLONG GetTimeStamp(EVENT_HEADER header) {
+    return header.TimeStamp.QuadPart;
 }
 
 ULONG GetKernelTime(EVENT_HEADER header) {
@@ -138,7 +120,6 @@ ULONGLONG GetDataPtr(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i) {
 USHORT GetDataSize(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i) {
      return extData[i].DataSize;
 }
-
 
 ULONG GetAddress32(PEVENT_EXTENDED_ITEM_STACK_TRACE32 trace32, int j) {
     return trace32->Address[j];

@@ -1,67 +1,14 @@
 package tracing_session
 
 /*
-#undef _WIN32_WINNT
-#define _WIN32_WINNT _WIN32_WINNT_WIN7
-
 #include "session.h"
 */
 import "C"
-import (
-	"time"
 
-	"golang.org/x/sys/windows"
-)
+// TODO: options, types
 
-type Session struct {
-	callback   EventCallback
-	hSession   C.TRACEHANDLE
-	properties []byte
-	Name       string
-
-	errChan   chan error
-	eventChan chan *Event
-}
-
-type EventCallback func(e *Event)
-
-// Event represents parsing result from structure:
-// https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
-type Event struct {
-	EventHeader EventHeader
-	eventRecord C.PEVENT_RECORD
-}
-
-// EventHeader consists common event information.
-type EventHeader struct {
-	ThreadId        uint32
-	ProcessId       uint32
-	TimeStamp       time.Time
-	EventDescriptor EventDescriptor
-	ProviderID      windows.GUID
-	KernelTime      uint32
-	UserTime        uint32
-	ActivityId      windows.GUID
-}
-
-// Go-analog of EVENT_DESCRIPTOR structure.
-// https://docs.microsoft.com/ru-ru/windows/win32/api/evntprov/ns-evntprov-event_descriptor
-type EventDescriptor struct {
-	Id      uint16
-	Version uint8
-	Channel uint8
-	Level   uint8
-	OpCode  uint8
-	Task    uint16
-	Keyword uint64
-}
-
-// windows constants
-
+// TODO: GO-style names for flags with appropriate description?
 const (
-	ENABLE_TRACE_PARAMETERS_VERSION   = 1
-	ENABLE_TRACE_PARAMETERS_VERSION_2 = 2
-
 	EVENT_ENABLE_PROPERTY_SID               = 0x001
 	EVENT_ENABLE_PROPERTY_TS_ID             = 0x002
 	EVENT_ENABLE_PROPERTY_STACK_TRACE       = 0x004
@@ -76,25 +23,4 @@ const (
 
 const (
 	TRACE_LEVEL_VERBOSE = 5
-)
-
-const (
-	EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1
-)
-
-const (
-	EVENT_TRACE_CONTROL_QUERY  = 0
-	EVENT_TRACE_CONTROL_STOP   = 1
-	EVENT_TRACE_CONTROL_UPDATE = 2
-)
-
-const (
-	EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID = iota + 1
-	EVENT_HEADER_EXT_TYPE_SID
-	EVENT_HEADER_EXT_TYPE_TS_ID
-	EVENT_HEADER_EXT_TYPE_INSTANCE_INFO
-	EVENT_HEADER_EXT_TYPE_STACK_TRACE32
-	EVENT_HEADER_EXT_TYPE_STACK_TRACE64
-	EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL
-	EVENT_HEADER_EXT_TYPE_PROV_TRAITS
 )

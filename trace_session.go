@@ -3,27 +3,33 @@ package tracing_session
 /*
 #cgo LDFLAGS: -ltdh
 
-#undef _WIN32_WINNT
-#define _WIN32_WINNT _WIN32_WINNT_WIN7
-
 #include "session.h"
 
+// handleEvent is exported from Go to CGO to guarantee C calling convention
+// to be able to pass as a C callback function.
+extern void handleEvent(PEVENT_RECORD e);
 */
 import "C"
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-var (
-	sessions       sync.Map
-	sessionCounter uint64
-)
+type Session struct {
+	Name string
+
+	cgoKey     uintptr
+	callback   EventCallback
+	hSession   C.TRACEHANDLE
+	properties []byte
+}
+
+type EventCallback func(e *Event)
 
 // NewSession creates windows trace session instance.
 func NewSession(sessionName string, logFileName string, callback EventCallback) (Session, error) {
@@ -48,10 +54,12 @@ func NewSession(sessionName string, logFileName string, callback EventCallback) 
 		p[i] = byte(s)
 		i++
 	}
-
-	status := C.StartTrace(&hSession, C.CString(sessionName), properties)
-	if syscall.Errno(status) != windows.ERROR_SUCCESS {
-		return Session{}, fmt.Errorf("failed to create session with %v", status)
+	
+	// TODO: why to create session before the subscription if we can't
+	// 		subscribe multiple times? (Or we can?)
+	ret := C.StartTrace(&hSession, C.CString(sessionName), properties)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return Session{}, fmt.Errorf("failed to create session; %w", status)
 	}
 
 	return Session{
@@ -66,29 +74,35 @@ func NewSession(sessionName string, logFileName string, callback EventCallback) 
 func (s *Session) SubscribeToProvider(providerGUID string) error {
 	guid, err := windows.GUIDFromString(providerGUID)
 	if err != nil {
-		return fmt.Errorf("failed to parse GUID from string %s", err)
+		return fmt.Errorf("failed to parse GUID; %w", err)
 	}
 
-	var params C.ENABLE_TRACE_PARAMETERS
+	params := C.ENABLE_TRACE_PARAMETERS{
+		Version:        2,                         // ENABLE_TRACE_PARAMETERS_VERSION_2
+		EnableProperty: EVENT_ENABLE_PROPERTY_SID, // TODO include this parameter to config
+	}
 
-	params.Version = ENABLE_TRACE_PARAMETERS_VERSION_2
-	params.EnableProperty = EVENT_ENABLE_PROPERTY_SID // TODO include this parameter to config
-	params.ControlFlags = 0
-	params.EnableFilterDesc = nil
-	params.FilterDescCount = 0
-
-	status := C.EnableTraceEx2(
+	//	ULONG WMIAPI EnableTraceEx2(
+	//		TRACEHANDLE              TraceHandle,
+	//		LPCGUID                  ProviderId,
+	//		ULONG                    ControlCode,
+	//		UCHAR                    Level,
+	//		ULONGLONG                MatchAnyKeyword,
+	//		ULONGLONG                MatchAllKeyword,
+	//		ULONG                    Timeout,
+	//		PENABLE_TRACE_PARAMETERS EnableParameters
+	//	);
+	ret := C.EnableTraceEx2(
 		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
-		EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-		TRACE_LEVEL_VERBOSE,
-		0, // TODO config
+		C.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+		TRACE_LEVEL_VERBOSE, // TODO: configure or switch to C definitions
+		0,                   // TODO: configure keywords matchers
 		0,
-		0,
+		0, // Timeout set to zero to enable the trace asynchronously
 		&params)
-
-	if syscall.Errno(status) != windows.ERROR_SUCCESS {
-		return fmt.Errorf("failed to subscribe to provider with %d", status)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return fmt.Errorf("failed to subscribe to provider; %w", status)
 	}
 
 	return nil
@@ -97,48 +111,116 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 // StartSession starts event consuming from session.
 // N.B. Blocking!
 func (s *Session) StartSession() error {
-	key := atomic.AddUint64(&sessionCounter, 1)
-	sessions.Store(key, s)
+	s.cgoKey = newSessionKey(s)
 
-	status := C.StartSession(C.CString(s.Name), C.PVOID(uintptr(key)))
-	if syscall.Errno(status) != windows.ERROR_SUCCESS &&
-		syscall.Errno(status) != windows.ERROR_CANCELLED {
-		return fmt.Errorf("failed start session with %v", status)
+	ret := C.StartSession(
+		C.CString(s.Name),
+		C.PVOID(s.cgoKey),
+		C.PEVENT_RECORD_CALLBACK(C.handleEvent),
+	)
+	switch status := windows.Errno(ret); status {
+	case windows.ERROR_SUCCESS, windows.ERROR_CANCELLED:
+		runtime.SetFinalizer(s, func(s *Session) {
+			freeSession(s.cgoKey)
+		})
+		return nil
+	default:
+		freeSession(s.cgoKey)
+		return fmt.Errorf("failed start session; %w", status)
 	}
-	return nil
 }
 
-// StopSession stops trace session.
+// StopSession stops trace session and frees associated resources.
 func (s *Session) StopSession() error {
-	status := C.ControlTraceW(
+	// ULONG WMIAPI ControlTraceW(
+	//  TRACEHANDLE             TraceHandle,
+	//  LPCWSTR                 InstanceName,
+	//  PEVENT_TRACE_PROPERTIES Properties,
+	//  ULONG                   ControlCode
+	// );
+	ret := C.ControlTraceW(
 		s.hSession,
-		(*C.ushort)(unsafe.Pointer(nil)),
+		nil,
 		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.properties[0])),
-		EVENT_TRACE_CONTROL_STOP)
+		C.EVENT_TRACE_CONTROL_STOP)
 
-	// Note from windows documentation:
-	// If you receive this error when stopping the session, ETW will have
+	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
 	// already stopped the session before generating this error.
-	if syscall.Errno(status) != windows.ERROR_MORE_DATA {
-		return fmt.Errorf("failed to stop session with %v", status)
+	// https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew
+	switch status := windows.Errno(ret); status {
+	case windows.ERROR_MORE_DATA, windows.ERROR_SUCCESS:
+		// All ok.
+	default:
+		return fmt.Errorf("failed to stop session; %w", status)
 	}
+
+	// TODO: free even on error?
+	freeSession(s.cgoKey)
+	runtime.SetFinalizer(s, nil)
 	return nil
 }
 
+// We can't pass Go-land pointers to the C-world so we use a classical trick
+// storing real pointers inside global map and passing to C "fake pointers"
+// which are actually map keys.
+var (
+	sessions       sync.Map
+	sessionCounter uintptr
+)
+
+// newSessionKey stores a @ptr inside a global storage returning its' key.
+// After use the key should be freed using `freeSession`.
+func newSessionKey(ptr *Session) uintptr {
+	key := atomic.AddUintptr(&sessionCounter, 1)
+	sessions.Store(key, ptr)
+
+	return key
+}
+
+func freeSession(key uintptr) {
+	sessions.Delete(key)
+}
+
+// handleEvent is exported to guarantee C calling convention and pass it as a
+// callback to the ETW API.
+//
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {
-	key := uint64(uintptr(eventRecord.UserContext))
-
+	key := uintptr(eventRecord.UserContext)
 	targetSession, ok := sessions.Load(key)
 	if !ok {
 		return
 	}
 
-	s := targetSession.(*Session)
-	event := &Event{
-		EventHeader: eventHeaderToGo(eventRecord.EventHeader),
+	targetSession.(*Session).callback(&Event{
+		Header:      eventHeaderToGo(eventRecord.EventHeader),
 		eventRecord: eventRecord,
-	}
+	})
+}
 
-	s.callback(event)
+// eventHeaderToGo converts windows EVENT_HEADER structure to go structure.
+func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
+	return EventHeader{
+		EventDescriptor: eventDescriptorToGo(header.EventDescriptor),
+		ThreadId:        uint32(header.ThreadId),
+		ProcessId:       uint32(header.ProcessId),
+		KernelTime:      uint32(C.GetKernelTime(header)),
+		UserTime:        uint32(C.GetUserTime(header)),
+		TimeStamp:       stampToTime(C.GetTimeStamp(header)),
+		ProviderID:      windowsGuidToGo(header.ProviderId),
+		ActivityId:      windowsGuidToGo(header.ActivityId),
+	}
+}
+
+// eventDescriptorToGo converts windows EVENT_DESCRIPTOR to go structure.
+func eventDescriptorToGo(descriptor C.EVENT_DESCRIPTOR) EventDescriptor {
+	return EventDescriptor{
+		Id:      uint16(descriptor.Id),
+		Version: uint8(descriptor.Version),
+		Channel: uint8(descriptor.Channel),
+		Level:   uint8(descriptor.Level),
+		OpCode:  uint8(descriptor.Opcode),
+		Task:    uint16(descriptor.Task),
+		Keyword: uint64(descriptor.Keyword),
+	}
 }

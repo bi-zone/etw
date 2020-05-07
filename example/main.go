@@ -1,22 +1,42 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	etw "github.com/MashaSamoylova/tracing-session"
 	"os"
 	"os/signal"
 	"sync"
+
+	etw "github.com/MashaSamoylova/tracing-session"
 )
 
 var wg sync.WaitGroup
 
-func callback(e *etw.Event) {
-	fmt.Println("wmi:", e.EventHeader.EventDescriptor.Id, e.EventHeader.TimeStamp)
-}
-
-
 func main() {
-	session, err := etw.NewSession("TEST-GO-GO", "test2.etl", callback)
+	if len(os.Args) < 2 {
+		fmt.Println("Usage ./trace-session.exe <providerGUID>")
+		return
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+
+	session, err := etw.NewSession("TEST-GO-GO", "test.etl", func(e *etw.Event) {
+		fmt.Println(e.Header.Id)
+		if e.Header.Id != 11 {
+			return
+		}
+
+		ext := e.ExtendedInfo()
+		if ext.UserSID != nil {
+			acc, _, _, _ := ext.UserSID.LookupAccount("")
+			fmt.Printf("Event from %s -- %s", ext.UserSID.String(), acc)
+		}
+		_ = enc.Encode(ext)
+		if data, err := e.EventProperties(); err == nil {
+			_ = enc.Encode(data)
+		}
+	})
 	if err != nil {
 		panic(err)
 	}
