@@ -26,21 +26,38 @@ type Session struct {
 	cgoKey     uintptr
 	callback   EventCallback
 	hSession   C.TRACEHANDLE
-	properties C.PEVENT_TRACE_PROPERTIES
+	properties []byte
 }
 
 type EventCallback func(e *Event)
 
 // NewSession creates windows trace session instance.
-func NewSession(sessionName string, callback EventCallback) (Session, error) {
-	var (
-		hSession   C.TRACEHANDLE
-		properties C.PEVENT_TRACE_PROPERTIES
-	)
+func NewSession(sessionName string, logFileName string, callback EventCallback) (Session, error) {
+	var hSession C.TRACEHANDLE
 
+	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
+	bufSize :=  eventPropertiesSize + len(sessionName) + len(logFileName) + 2 // for null symbols
+
+	p := make([]byte, bufSize)
+
+	properties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&p[0]))
+	properties.Wnode.BufferSize = C.ulong(bufSize)
+	properties.Wnode.ClientContext = 1
+	properties.Wnode.Flags = C.WNODE_FLAG_TRACED_GUID
+	properties.LogFileMode = C.EVENT_TRACE_REAL_TIME_MODE | C.EVENT_TRACE_FILE_MODE_SEQUENTIAL
+	properties.MaximumFileSize = 10 // mb TODO include this to config
+	properties.LoggerNameOffset = C.ulong(eventPropertiesSize)
+	properties.LogFileNameOffset = C.ulong(eventPropertiesSize + len(sessionName) + 1) // include null from session name string
+
+	i := int(properties.LogFileNameOffset)
+	for _, s := range logFileName {
+		p[i] = byte(s)
+		i++
+	}
+	
 	// TODO: why to create session before the subscription if we can't
 	// 		subscribe multiple times? (Or we can?)
-	ret := C.CreateSession(&hSession, &properties, C.CString(sessionName))
+	ret := C.StartTrace(&hSession, C.CString(sessionName), properties)
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
 		return Session{}, fmt.Errorf("failed to create session; %w", status)
 	}
@@ -48,7 +65,7 @@ func NewSession(sessionName string, callback EventCallback) (Session, error) {
 	return Session{
 		callback:   callback,
 		hSession:   hSession,
-		properties: properties,
+		properties: p,
 		Name:       sessionName,
 	}, nil
 }
@@ -63,7 +80,6 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 	params := C.ENABLE_TRACE_PARAMETERS{
 		Version:        2,                         // ENABLE_TRACE_PARAMETERS_VERSION_2
 		EnableProperty: EVENT_ENABLE_PROPERTY_SID, // TODO include this parameter to config
-		SourceId:       s.properties.Wnode.Guid,
 	}
 
 	//	ULONG WMIAPI EnableTraceEx2(
@@ -124,10 +140,9 @@ func (s *Session) StopSession() error {
 	// );
 	ret := C.ControlTraceW(
 		s.hSession,
-		nil, // You must specify SessionName if SessionHandle is NULL.
-		s.properties,
-		C.EVENT_TRACE_CONTROL_STOP,
-	)
+		nil,
+		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.properties[0])),
+		C.EVENT_TRACE_CONTROL_STOP)
 
 	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
 	// already stopped the session before generating this error.
@@ -142,7 +157,6 @@ func (s *Session) StopSession() error {
 	// TODO: free even on error?
 	freeSession(s.cgoKey)
 	runtime.SetFinalizer(s, nil)
-	C.free(unsafe.Pointer(s.properties))
 	return nil
 }
 

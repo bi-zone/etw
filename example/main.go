@@ -21,7 +21,7 @@ func main() {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
-	session, err := etw.NewSession("TEST-GO-GO", func(e *etw.Event) {
+	session, err := etw.NewSession("TEST-GO-GO", "test.etl", func(e *etw.Event) {
 		fmt.Println(e.Header.Id)
 		if e.Header.Id != 11 {
 			return
@@ -40,7 +40,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err := session.SubscribeToProvider(os.Args[1]); err != nil {
+	if err := session.SubscribeToProvider("{1418EF04-B0B4-4623-BF7E-D74AB47BBDAA}"); err != nil {
 		fmt.Println(err)
 		err = session.StopSession()
 		if err != nil {
@@ -63,6 +63,7 @@ func main() {
 			panic(err)
 		}
 	}()
+
 
 	// Trap cancellation (the only signal values guaranteed to be present in
 	// the os package on all systems are os.Interrupt and os.Kill).

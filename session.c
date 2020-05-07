@@ -1,18 +1,5 @@
 #include "session.h"
 
-// TODO: why not to do it in go?
-ULONG CreateSession(TRACEHANDLE* hSession, PEVENT_TRACE_PROPERTIES* properties, char* sessionName) {
-    const size_t buffSize = sizeof(EVENT_TRACE_PROPERTIES) + strlen(sessionName) + 1;
-    *properties = calloc(buffSize, sizeof(char));
-    (*properties)->Wnode.BufferSize = buffSize;
-    (*properties)->Wnode.ClientContext = 1;
-    (*properties)->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
-    (*properties)->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
-    (*properties)->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-
-    // TODO: is it StartTraceW or StartTraceA?
-    return StartTrace(hSession, sessionName, *properties);
-};
 
 ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb) {
     EVENT_TRACE_LOGFILE trace = {0};
