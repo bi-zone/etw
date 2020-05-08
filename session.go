@@ -32,15 +32,16 @@ type Session struct {
 type EventCallback func(e *Event)
 
 // NewSession creates windows trace session instance.
+//
+// TODO: specify unicode version by default?
+// 		 https://github.com/msys2-contrib/mingw-w64/blob/master/mingw-w64-headers/include/evntrace.h#L702
 func NewSession(sessionName string, logFileName string, callback EventCallback) (Session, error) {
-	var hSession C.TRACEHANDLE
-
 	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
-	bufSize :=  eventPropertiesSize + len(sessionName) + len(logFileName) + 2 // for null symbols
+	bufSize := eventPropertiesSize + len(sessionName) + len(logFileName) + 2 // for null symbols
 
-	p := make([]byte, bufSize)
+	propertiesBuf := make([]byte, bufSize)
 
-	properties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&p[0]))
+	properties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&propertiesBuf[0]))
 	properties.Wnode.BufferSize = C.ulong(bufSize)
 	properties.Wnode.ClientContext = 1
 	properties.Wnode.Flags = C.WNODE_FLAG_TRACED_GUID
@@ -51,12 +52,14 @@ func NewSession(sessionName string, logFileName string, callback EventCallback) 
 
 	i := int(properties.LogFileNameOffset)
 	for _, s := range logFileName {
-		p[i] = byte(s)
+		propertiesBuf[i] = byte(s)
 		i++
 	}
-	
+
 	// TODO: why to create session before the subscription if we can't
 	// 		subscribe multiple times? (Or we can?)
+	//		+ why to start session before the actual start collection?
+	var hSession C.TRACEHANDLE
 	ret := C.StartTrace(&hSession, C.CString(sessionName), properties)
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
 		return Session{}, fmt.Errorf("failed to create session; %w", status)
@@ -65,13 +68,15 @@ func NewSession(sessionName string, logFileName string, callback EventCallback) 
 	return Session{
 		callback:   callback,
 		hSession:   hSession,
-		properties: p,
+		properties: propertiesBuf,
 		Name:       sessionName,
 	}, nil
 }
 
 // SubscribeToProvider subscribes session to a provider.
 func (s *Session) SubscribeToProvider(providerGUID string) error {
+	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
+
 	guid, err := windows.GUIDFromString(providerGUID)
 	if err != nil {
 		return fmt.Errorf("failed to parse GUID; %w", err)
@@ -82,16 +87,16 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 		EnableProperty: EVENT_ENABLE_PROPERTY_SID, // TODO include this parameter to config
 	}
 
-	//	ULONG WMIAPI EnableTraceEx2(
-	//		TRACEHANDLE              TraceHandle,
-	//		LPCGUID                  ProviderId,
-	//		ULONG                    ControlCode,
-	//		UCHAR                    Level,
-	//		ULONGLONG                MatchAnyKeyword,
-	//		ULONGLONG                MatchAllKeyword,
-	//		ULONG                    Timeout,
-	//		PENABLE_TRACE_PARAMETERS EnableParameters
-	//	);
+	// ULONG WMIAPI EnableTraceEx2(
+	//	TRACEHANDLE              TraceHandle,
+	//	LPCGUID                  ProviderId,
+	//	ULONG                    ControlCode,
+	//	UCHAR                    Level,
+	//	ULONGLONG                MatchAnyKeyword,
+	//	ULONGLONG                MatchAllKeyword,
+	//	ULONG                    Timeout,
+	//	PENABLE_TRACE_PARAMETERS EnableParameters
+	// );
 	ret := C.EnableTraceEx2(
 		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
@@ -113,6 +118,11 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 func (s *Session) StartSession() error {
 	s.cgoKey = newSessionKey(s)
 
+	// ULONG StartSession(
+	//	char* sessionName,
+	//	PVOID context,
+	//	PEVENT_RECORD_CALLBACK cb
+	// );
 	ret := C.StartSession(
 		C.CString(s.Name),
 		C.PVOID(s.cgoKey),
@@ -132,6 +142,8 @@ func (s *Session) StartSession() error {
 
 // StopSession stops trace session and frees associated resources.
 func (s *Session) StopSession() error {
+	// TODO: EVENT_CONTROL_CODE_DISABLE_PROVIDER ???
+
 	// ULONG WMIAPI ControlTraceW(
 	//  TRACEHANDLE             TraceHandle,
 	//  LPCWSTR                 InstanceName,
@@ -157,6 +169,10 @@ func (s *Session) StopSession() error {
 	// TODO: free even on error?
 	freeSession(s.cgoKey)
 	runtime.SetFinalizer(s, nil)
+
+	// TODO: https://docs.microsoft.com/windows/desktop/ETW/closetrace ???
+	// > If you are processing events from a log file, you call this function only after the ProcessTrace function returns.
+	// (-__\\
 	return nil
 }
 

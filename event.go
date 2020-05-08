@@ -9,7 +9,6 @@ import "C"
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 	"unsafe"
 
@@ -56,9 +55,9 @@ func (e *Event) EventProperties() (map[string]interface{}, error) {
 
 	p, err := newPropertyParser(e.eventRecord)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse event properties; %s", err)
+		return nil, fmt.Errorf("failed to parse event properties; %w", err)
 	}
-	defer p.close()
+	defer p.free()
 
 	properties := make(map[string]interface{}, int(p.info.TopLevelPropertyCount))
 	for i := 0; i < int(p.info.TopLevelPropertyCount); i++ {
@@ -67,7 +66,7 @@ func (e *Event) EventProperties() (map[string]interface{}, error) {
 		if err != nil {
 			// Parsing values we consume given event data buffer with var length chunks.
 			// If we skip any -- we'll lost offset, so fail early.
-			return nil, fmt.Errorf("failed to parse %q value %s", name, err)
+			return nil, fmt.Errorf("failed to parse %q value; %w", name, err)
 		}
 		properties[name] = value
 	}
@@ -178,24 +177,28 @@ func (e *Event) parseExtendedInfo() ExtendedEventInfo {
 	return extendedData
 }
 
+// Initially we are handed an EVENT_RECORD structure. While this structure technically contains
+// all of the information necessary, TdhGetEventInformation parses the structure and simplifies it
+// so we can more effectively parse and handle the various fields.
 func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
-	var pInfo C.PTRACE_EVENT_INFO
-	var bufferSize C.ulong
-
-	// get structure size
-	status := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
-
-	if windows.Errno(status) == windows.ERROR_INSUFFICIENT_BUFFER {
+	var (
+		pInfo      C.PTRACE_EVENT_INFO
+		bufferSize C.ulong
+	)
+	// Retrieve a buffer size.
+	ret := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
+	if windows.Errno(ret) == windows.ERROR_INSUFFICIENT_BUFFER {
 		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.ulonglong(bufferSize)))
 		if pInfo == nil {
-			return nil, fmt.Errorf("failed to allocate memory for event info (size=%v)", bufferSize)
+			return nil, fmt.Errorf("malloc(%v) failed", bufferSize)
 		}
 
-		status = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
+		// Fetch the buffer itself.
+		ret = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 	}
 
-	if windows.Errno(status) != windows.ERROR_SUCCESS {
-		return nil, fmt.Errorf("TdhGetEventInformation failed with %v", status)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return nil, fmt.Errorf("TdhGetEventInformation failed; %w", status)
 	}
 
 	return pInfo, nil
@@ -207,25 +210,31 @@ type propertyParser struct {
 	info    C.PTRACE_EVENT_INFO
 	data    uintptr
 	endData uintptr
+	ptrSize uintptr
 }
 
 func newPropertyParser(r C.PEVENT_RECORD) (*propertyParser, error) {
 	info, err := getEventInformation(r)
-	if err == nil {
-		return &propertyParser{
-			record:  r,
-			info:    info,
-			data:    uintptr(r.UserData),
-			endData: uintptr(r.UserData) + uintptr(r.UserDataLength),
-		}, nil
+	if err != nil {
+		if info != nil {
+			C.free(unsafe.Pointer(info))
+		}
+		return nil, fmt.Errorf("failed to get event information; %w", err)
 	}
-	if info != nil {
-		C.free(unsafe.Pointer(info))
+	ptrSize := unsafe.Sizeof(uint64(0))
+	if r.EventHeader.Flags&C.EVENT_HEADER_FLAG_32_BIT_HEADER == C.EVENT_HEADER_FLAG_32_BIT_HEADER {
+		ptrSize = unsafe.Sizeof(uint32(0))
 	}
-	return nil, fmt.Errorf("failed to get event information")
+	return &propertyParser{
+		record:  r,
+		info:    info,
+		ptrSize: ptrSize,
+		data:    uintptr(r.UserData),
+		endData: uintptr(r.UserData) + uintptr(r.UserDataLength),
+	}, nil
 }
 
-func (p *propertyParser) close() {
+func (p *propertyParser) free() {
 	if p.info != nil {
 		C.free(unsafe.Pointer(p.info))
 	}
@@ -264,6 +273,10 @@ func (p *propertyParser) parseComplexType(i int) ([]string, error) {
 	return structure, nil
 }
 
+// For some weird reasons non of mingw versions has TdhFormatProperty defined
+// so the only possible way is to use a DLL here.
+//
+//nolint:gochecknoglobals
 var (
 	tdh               = windows.NewLazySystemDLL("Tdh.dll")
 	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
@@ -272,97 +285,89 @@ var (
 func (p *propertyParser) parseSimpleType(i int) (string, error) {
 	mapInfo, err := getMapInfo(p.record, p.info, i)
 	if err != nil {
-		return "", fmt.Errorf("failed to get map info; %s", err)
-	}
-
-	var pMapInfo uintptr
-	if len(mapInfo) == 0 {
-		pMapInfo = uintptr(unsafe.Pointer(nil))
-	} else {
-		pMapInfo = uintptr(unsafe.Pointer(&mapInfo[0]))
+		return "", fmt.Errorf("failed to get map info; %w", err)
 	}
 
 	var propertyLength C.uint
-	status := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
-	if windows.Errno(status) != windows.ERROR_SUCCESS {
-		return "", fmt.Errorf("failed to get property length with %v", status)
+	ret := C.GetPropertyLength(p.record, p.info, C.int(i), &propertyLength)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return "", fmt.Errorf("failed to get property length; %w", status)
 	}
 
-	var formattedDataSize C.int
-	var userDataConsumed C.int
-	// We make the first call to get the size of formatted data.
-	r0, _, _ := tdhFormatProperty.Call(
-		uintptr(unsafe.Pointer(p.record)),
-		pMapInfo,
-		uintptr(strconv.IntSize/8),
-		uintptr(C.GetInType(p.info, C.int(i))),
-		uintptr(C.GetOutType(p.info, C.int(i))),
-		uintptr(propertyLength),
-		p.endData-p.data,
-		p.data,
-		uintptr(unsafe.Pointer(&formattedDataSize)),
-		0,
-		uintptr(unsafe.Pointer(&userDataConsumed)),
+	inType := uintptr(C.GetInType(p.info, C.int(i)))
+	outType := uintptr(C.GetOutType(p.info, C.int(i)))
+
+	// We are going to guess a value size to save a DLL call, so preallocate.
+	var (
+		userDataConsumed  C.int
+		formattedDataSize C.int = 50
 	)
-
-	if windows.Errno(r0) != windows.ERROR_INSUFFICIENT_BUFFER {
-		return "", fmt.Errorf("failed to format event property with %v", r0)
-	}
-
-	if int(formattedDataSize) == 0 {
-		return "", nil
-	}
-
 	formattedData := make([]byte, int(formattedDataSize))
 
-	r0, _, _ = tdhFormatProperty.Call(
-		uintptr(unsafe.Pointer(p.info)),
-		pMapInfo,
-		uintptr(strconv.IntSize/8),
-		uintptr(C.GetInType(p.info, C.int(i))),
-		uintptr(C.GetOutType(p.info, C.int(i))),
-		uintptr(propertyLength),
-		p.endData-p.data,
-		p.data,
-		uintptr(unsafe.Pointer(&formattedDataSize)),
-		uintptr(unsafe.Pointer(&formattedData[0])),
-		uintptr(unsafe.Pointer(&userDataConsumed)),
-	)
+retryLoop:
+	for {
+		r0, _, _ := tdhFormatProperty.Call(
+			uintptr(unsafe.Pointer(p.record)),
+			uintptr(mapInfo),
+			p.ptrSize,
+			inType,
+			outType,
+			uintptr(propertyLength),
+			p.endData-p.data,
+			p.data,
+			uintptr(unsafe.Pointer(&formattedDataSize)),
+			uintptr(unsafe.Pointer(&formattedData[0])),
+			uintptr(unsafe.Pointer(&userDataConsumed)),
+		)
 
-	if windows.Errno(r0) != windows.ERROR_SUCCESS {
-		return "", fmt.Errorf("failed to format event property with %v", r0)
+		switch status := windows.Errno(r0); status {
+		case windows.ERROR_INSUFFICIENT_BUFFER:
+			formattedData = make([]byte, int(formattedDataSize))
+			continue
+		case windows.ERROR_SUCCESS:
+			break retryLoop
+		default:
+			return "", fmt.Errorf("TdhFormatProperty failed; %w", status)
+		}
 	}
-
 	p.data += uintptr(userDataConsumed)
 
 	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(formattedDataSize)), nil
 }
 
-func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) ([]byte, error) {
+// getMapInfo retrieve the mapping between the @index-th field and the structure it represents.
+// If that mapping exists, function extracts it and returns a buffer it containing, if not,
+// function can legitimately return `nil, nil`.
+func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (unsafe.Pointer, error) {
 	var mapSize C.ulong
 	mapName := C.GetMapName(info, C.int(index))
-	status := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
 
-	if windows.Errno(status) == windows.ERROR_NOT_FOUND {
-		return nil, nil
+	// Query map info if any exists.
+	ret := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
+	switch status := windows.Errno(ret); status {
+	case windows.ERROR_NOT_FOUND:
+		return nil, nil // Pretty ok, just no map info
+	case windows.ERROR_INSUFFICIENT_BUFFER:
+		// Info exists -- need a buffer.
+	default:
+		return nil, fmt.Errorf("TdhGetEventMapInformation failed to get size; %w", status)
 	}
 
-	if windows.Errno(status) != windows.ERROR_INSUFFICIENT_BUFFER {
-		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
-	}
-
+	// Get the info itself.
 	mapInfo := make([]byte, int(mapSize))
-	status = C.TdhGetEventMapInformation(
+	ret = C.TdhGetEventMapInformation(
 		event,
 		C.GetMapName(info, C.int(index)),
 		(C.PEVENT_MAP_INFO)(unsafe.Pointer(&mapInfo[0])),
 		&mapSize)
-
-	if windows.Errno(status) != windows.ERROR_SUCCESS {
-		return nil, fmt.Errorf("failed to get mapInfo with %v", status)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return nil, fmt.Errorf("TdhGetEventMapInformation failed; %w", status)
 	}
 
-	return mapInfo, nil
+	if len(mapInfo) == 0 {
+		return unsafe.Pointer(nil), nil
+	}
+	return unsafe.Pointer(&mapInfo[0]), nil
 }
 
 func windowsGuidToGo(guid C.GUID) windows.GUID {
