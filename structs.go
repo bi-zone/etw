@@ -59,6 +59,7 @@ const (
 )
 
 type TraceLevel int
+
 const (
 	TRACE_LEVEL_CRITICAL    = TraceLevel(1)
 	TRACE_LEVEL_ERROR       = TraceLevel(2)

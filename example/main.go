@@ -64,7 +64,6 @@ func main() {
 		}
 	}()
 
-
 	// Trap cancellation (the only signal values guaranteed to be present in
 	// the os package on all systems are os.Interrupt and os.Kill).
 	sigCh := make(chan os.Signal, 1)

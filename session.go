@@ -23,6 +23,7 @@ import (
 type Session struct {
 	Name string
 
+	guid       windows.GUID
 	cgoKey     uintptr
 	callback   EventCallback
 	hSession   C.TRACEHANDLE
@@ -83,8 +84,8 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 	}
 
 	params := C.ENABLE_TRACE_PARAMETERS{
-		Version:        2,                         // ENABLE_TRACE_PARAMETERS_VERSION_2
-		EnableProperty: EVENT_ENABLE_PROPERTY_SID, // TODO include this parameter to config
+		Version:        2,                                  // ENABLE_TRACE_PARAMETERS_VERSION_2
+		EnableProperty: C.ulong(EVENT_ENABLE_PROPERTY_SID), // TODO include this parameter to config
 	}
 
 	// ULONG WMIAPI EnableTraceEx2(
@@ -101,8 +102,8 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
 		C.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-		TRACE_LEVEL_VERBOSE, // TODO: configure or switch to C definitions
-		0,                   // TODO: configure keywords matchers
+		C.uchar(TRACE_LEVEL_VERBOSE), // TODO: configure or switch to C definitions
+		0,                            // TODO: configure keywords matchers
 		0,
 		0, // Timeout set to zero to enable the trace asynchronously
 		&params)
@@ -142,7 +143,31 @@ func (s *Session) StartSession() error {
 
 // StopSession stops trace session and frees associated resources.
 func (s *Session) StopSession() error {
-	// TODO: EVENT_CONTROL_CODE_DISABLE_PROVIDER ???
+	// Disabling providers before stopping the session.
+	// MSDN docs:
+	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
+	// "Be sure to disable all providers before stopping the session."
+
+	// ULONG WMIAPI EnableTraceEx2(
+	//	TRACEHANDLE              TraceHandle,
+	//	LPCGUID                  ProviderId,
+	//	ULONG                    ControlCode,
+	//	UCHAR                    Level,
+	//	ULONGLONG                MatchAnyKeyword,
+	//	ULONGLONG                MatchAllKeyword,
+	//	ULONG                    Timeout,
+	//	PENABLE_TRACE_PARAMETERS EnableParameters
+	// );
+
+	ret := C.EnableTraceEx2(
+		s.hSession,
+		(*C.GUID)(unsafe.Pointer(&s.guid)),
+		C.EVENT_CONTROL_CODE_DISABLE_PROVIDER,
+		C.uchar(TRACE_LEVEL_VERBOSE), // TODO use config here
+		0,                            // TODO use config here
+		0,                            // TODO use config here
+		0,                            // TODO use config here
+		nil)
 
 	// ULONG WMIAPI ControlTraceW(
 	//  TRACEHANDLE             TraceHandle,
@@ -150,7 +175,7 @@ func (s *Session) StopSession() error {
 	//  PEVENT_TRACE_PROPERTIES Properties,
 	//  ULONG                   ControlCode
 	// );
-	ret := C.ControlTraceW(
+	ret = C.ControlTraceW(
 		s.hSession,
 		nil,
 		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.properties[0])),
