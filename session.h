@@ -26,6 +26,7 @@ int GetLastIndex(PTRACE_EVENT_INFO info, int i);
 LONGLONG GetTimeStamp(EVENT_HEADER header);
 ULONG GetKernelTime(EVENT_HEADER header);
 ULONG GetUserTime(EVENT_HEADER header);
+ULONG64 GetProcessorTime(EVENT_HEADER header);
 
 // Helpers for extended data parsing.
 USHORT GetExtType(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i);

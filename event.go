@@ -27,11 +27,25 @@ type EventHeader struct {
 	EventDescriptor
 	ThreadId   uint32
 	ProcessId  uint32
-	KernelTime uint32 // TODO: EVENT_HEADER_FLAG_NO_CPUTIME
-	UserTime   uint32
 	TimeStamp  time.Time
 	ProviderID windows.GUID
 	ActivityId windows.GUID
+
+	Flags         uint16
+	KernelTime    uint32
+	UserTime      uint32
+	ProcessorTime uint64
+}
+
+func (h EventHeader) HasCPUTime() bool {
+	switch {
+	case h.Flags&C.EVENT_HEADER_FLAG_NO_CPUTIME != 0:
+		return false
+	case h.Flags&C.EVENT_HEADER_FLAG_PRIVATE_SESSION != 0:
+		return false
+	default:
+		return true
+	}
 }
 
 // EventDescriptor is Go-analog of EVENT_DESCRIPTOR structure.

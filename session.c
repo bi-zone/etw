@@ -109,6 +109,10 @@ ULONG GetUserTime(EVENT_HEADER header) {
     return header.UserTime;
 }
 
+ULONG64 GetProcessorTime(EVENT_HEADER header) {
+    return header.ProcessorTime;
+}
+
 USHORT GetExtType(PEVENT_HEADER_EXTENDED_DATA_ITEM extData, int i) {
     return extData[i].ExtType;
 }
