@@ -21,8 +21,8 @@ func main() {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
-	session, err := etw.NewSession("TEST-GO-GO", "test.etl", func(e *etw.Event) {
-		fmt.Println(e.Header.Id)
+	session, err := etw.NewSession("TEST-GO-GO", func(e *etw.Event) {
+		fmt.Printf("Event %d from %s\n", e.Header.Id, e.Header.TimeStamp)
 		if e.Header.Id != 11 {
 			return
 		}
@@ -30,7 +30,7 @@ func main() {
 		ext := e.ExtendedInfo()
 		if ext.UserSID != nil {
 			acc, _, _, _ := ext.UserSID.LookupAccount("")
-			fmt.Printf("Event from %s -- %s", ext.UserSID.String(), acc)
+			fmt.Printf("Event from %s -- %s\n", ext.UserSID.String(), acc)
 		}
 		_ = enc.Encode(ext)
 		if data, err := e.EventProperties(); err == nil {
@@ -40,7 +40,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err := session.SubscribeToProvider("{1418EF04-B0B4-4623-BF7E-D74AB47BBDAA}"); err != nil {
+	if err := session.SubscribeToProvider(os.Args[1]); err != nil {
 		fmt.Println(err)
 		err = session.StopSession()
 		if err != nil {

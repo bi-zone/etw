@@ -23,11 +23,11 @@ import (
 type Session struct {
 	Name string
 
-	guid       windows.GUID
-	cgoKey     uintptr
-	callback   EventCallback
-	hSession   C.TRACEHANDLE
-	properties []byte
+	guid          windows.GUID
+	cgoKey        uintptr
+	callback      EventCallback
+	hSession      C.TRACEHANDLE
+	propertiesBuf []byte
 }
 
 type EventCallback func(e *Event)
@@ -36,26 +36,25 @@ type EventCallback func(e *Event)
 //
 // TODO: specify unicode version by default?
 // 		 https://github.com/msys2-contrib/mingw-w64/blob/master/mingw-w64-headers/include/evntrace.h#L702
-func NewSession(sessionName string, logFileName string, callback EventCallback) (Session, error) {
+func NewSession(sessionName string, callback EventCallback) (Session, error) {
+	// We need to allocate a sequential buffer for a structure and a session name
+	// which will be placed there by an API call (for the future calls).
+	//
+	// (Ref: https://docs.microsoft.com/en-us/windows/win32/etw/wnode-header#members)
+	//
+	// The only way to do it in go -- unsafe cast of the allocated memory.
 	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
-	bufSize := eventPropertiesSize + len(sessionName) + len(logFileName) + 2 // for null symbols
-
+	bufSize := eventPropertiesSize + len(sessionName) + 1 // for null symbol
 	propertiesBuf := make([]byte, bufSize)
 
+	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_properties
 	properties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&propertiesBuf[0]))
 	properties.Wnode.BufferSize = C.ulong(bufSize)
-	properties.Wnode.ClientContext = 1
+	properties.Wnode.ClientContext = 2 // Use System time for event Timestamp
 	properties.Wnode.Flags = C.WNODE_FLAG_TRACED_GUID
-	properties.LogFileMode = C.EVENT_TRACE_REAL_TIME_MODE | C.EVENT_TRACE_FILE_MODE_SEQUENTIAL
-	properties.MaximumFileSize = 10 // mb TODO include this to config
-	properties.LoggerNameOffset = C.ulong(eventPropertiesSize)
-	properties.LogFileNameOffset = C.ulong(eventPropertiesSize + len(sessionName) + 1) // include null from session name string
 
-	i := int(properties.LogFileNameOffset)
-	for _, s := range logFileName {
-		propertiesBuf[i] = byte(s)
-		i++
-	}
+	// Mark that we are going to process events in real time using a callback.
+	properties.LogFileMode = C.EVENT_TRACE_REAL_TIME_MODE
 
 	// TODO: why to create session before the subscription if we can't
 	// 		subscribe multiple times? (Or we can?)
@@ -67,10 +66,10 @@ func NewSession(sessionName string, logFileName string, callback EventCallback) 
 	}
 
 	return Session{
-		callback:   callback,
-		hSession:   hSession,
-		properties: propertiesBuf,
-		Name:       sessionName,
+		Name:          sessionName,
+		callback:      callback,
+		hSession:      hSession,
+		propertiesBuf: propertiesBuf,
 	}, nil
 }
 
@@ -85,7 +84,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 
 	params := C.ENABLE_TRACE_PARAMETERS{
 		Version:        2,                                  // ENABLE_TRACE_PARAMETERS_VERSION_2
-		EnableProperty: C.ulong(EVENT_ENABLE_PROPERTY_SID), // TODO include this parameter to config
+		EnableProperty: C.ULONG(EVENT_ENABLE_PROPERTY_SID), // TODO include this parameter to config
 	}
 
 	// ULONG WMIAPI EnableTraceEx2(
@@ -102,7 +101,7 @@ func (s *Session) SubscribeToProvider(providerGUID string) error {
 		s.hSession,
 		(*C.GUID)(unsafe.Pointer(&guid)),
 		C.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-		C.uchar(TRACE_LEVEL_VERBOSE), // TODO: configure or switch to C definitions
+		C.UCHAR(TRACE_LEVEL_VERBOSE), // TODO: configure or switch to C definitions
 		0,                            // TODO: configure keywords matchers
 		0,
 		0, // Timeout set to zero to enable the trace asynchronously
@@ -178,7 +177,7 @@ func (s *Session) StopSession() error {
 	ret = C.ControlTraceW(
 		s.hSession,
 		nil,
-		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.properties[0])),
+		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.propertiesBuf[0])),
 		C.EVENT_TRACE_CONTROL_STOP)
 
 	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have

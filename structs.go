@@ -8,57 +8,15 @@ import "C"
 // TODO: options, types
 
 // TODO: GO-style names for flags with appropriate description?
-
-type LogFileOptions struct {
-	FileName        string // should contain %d if you want rotation
-	Mode            FileMode
-	MaximumFileSize int
-}
-
 type SessionOptions struct {
-	ProviderGuid    string
-	Level           TraceLevel
-	MatchAnyKeyword uint64
-	MatchAllKeyword uint64
-
+	Name             string
+	Level            TraceLevel
+	MatchAnyKeyword  uint64
+	MatchAllKeyword  uint64
 	EnableProperties []EnableProperty
 }
 
-type FileMode int
-
-// https://docs.microsoft.com/ru-ru/windows/win32/etw/logging-mode-constants
-// TODO Maybe we don't need ALL file mods?
-// TODO And do we need describes for file modes or doc reference would be enough?
-const (
-	EVENT_TRACE_FILE_MODE_NONE             = FileMode(C.EVENT_TRACE_FILE_MODE_NONE)
-	EVENT_TRACE_FILE_MODE_SEQUENTIAL       = FileMode(C.EVENT_TRACE_FILE_MODE_SEQUENTIAL)
-	EVENT_TRACE_FILE_MODE_CIRCULAR         = FileMode(C.EVENT_TRACE_FILE_MODE_CIRCULAR)
-	EVENT_TRACE_FILE_MODE_APPEND           = FileMode(C.EVENT_TRACE_FILE_MODE_APPEND)
-	EVENT_TRACE_FILE_MODE_NEWFILE          = FileMode(C.EVENT_TRACE_FILE_MODE_NEWFILE)
-	EVENT_TRACE_FILE_MODE_PREALLOCATE      = FileMode(C.EVENT_TRACE_FILE_MODE_PREALLOCATE)
-	EVENT_TRACE_NONSTOPPABLE_MODE          = FileMode(C.EVENT_TRACE_NONSTOPPABLE_MODE)
-	EVENT_TRACE_SECURE_MODE                = FileMode(C.EVENT_TRACE_SECURE_MODE)
-	EVENT_TRACE_REAL_TIME_MODE             = FileMode(C.EVENT_TRACE_REAL_TIME_MODE)
-	EVENT_TRACE_DELAY_OPEN_FILE_MODE       = FileMode(C.EVENT_TRACE_DELAY_OPEN_FILE_MODE)
-	EVENT_TRACE_BUFFERING_MODE             = FileMode(C.EVENT_TRACE_BUFFERING_MODE)
-	EVENT_TRACE_PRIVATE_LOGGER_MODE        = FileMode(C.EVENT_TRACE_PRIVATE_LOGGER_MODE)
-	EVENT_TRACE_ADD_HEADER_MODE            = FileMode(C.EVENT_TRACE_ADD_HEADER_MODE)
-	EVENT_TRACE_USE_KBYTES_FOR_SIZE        = FileMode(C.EVENT_TRACE_USE_KBYTES_FOR_SIZE)
-	EVENT_TRACE_USE_GLOBAL_SEQUENCE        = FileMode(C.EVENT_TRACE_USE_GLOBAL_SEQUENCE)
-	EVENT_TRACE_USE_LOCAL_SEQUENCE         = FileMode(C.EVENT_TRACE_USE_LOCAL_SEQUENCE)
-	EVENT_TRACE_RELOG_MODE                 = FileMode(C.EVENT_TRACE_RELOG_MODE)
-	EVENT_TRACE_PRIVATE_IN_PROC            = FileMode(C.EVENT_TRACE_PRIVATE_IN_PROC)
-	EVENT_TRACE_MODE_RESERVED              = FileMode(C.EVENT_TRACE_MODE_RESERVED)
-	EVENT_TRACE_STOP_ON_HYBRID_SHUTDOWN    = FileMode(C.EVENT_TRACE_STOP_ON_HYBRID_SHUTDOWN)
-	EVENT_TRACE_PERSIST_ON_HYBRID_SHUTDOWN = FileMode(C.EVENT_TRACE_PERSIST_ON_HYBRID_SHUTDOWN)
-	EVENT_TRACE_USE_PAGED_MEMORY           = FileMode(C.EVENT_TRACE_USE_PAGED_MEMORY)
-	EVENT_TRACE_SYSTEM_LOGGER_MODE         = FileMode(C.EVENT_TRACE_SYSTEM_LOGGER_MODE)
-	EVENT_TRACE_INDEPENDENT_SESSION_MODE   = FileMode(C.EVENT_TRACE_INDEPENDENT_SESSION_MODE)
-	EVENT_TRACE_NO_PER_PROCESSOR_BUFFERING = FileMode(C.EVENT_TRACE_NO_PER_PROCESSOR_BUFFERING)
-	EVENT_TRACE_ADDTO_TRIAGE_DUMP          = FileMode(C.EVENT_TRACE_ADDTO_TRIAGE_DUMP)
-)
-
-type TraceLevel int
+type TraceLevel C.UCHAR
 
 const (
 	TRACE_LEVEL_CRITICAL    = TraceLevel(1)
@@ -68,7 +26,7 @@ const (
 	TRACE_LEVEL_VERBOSE     = TraceLevel(5)
 )
 
-type EnableProperty int
+type EnableProperty C.ULONG
 
 const (
 	EVENT_ENABLE_PROPERTY_SID               = EnableProperty(0x001)
