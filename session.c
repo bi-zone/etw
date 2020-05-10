@@ -1,20 +1,15 @@
 #include "session.h"
 
-
-ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb) {
-    EVENT_TRACE_LOGFILE trace = {0};
-    trace.LoggerName = sessionName;
-    trace.Context = context;
+// OpenTraceHelper helps to access EVENT_TRACE_LOGFILEW union fields and pass
+// pointer to C not warning CGO checker.
+TRACEHANDLE OpenTraceHelper(LPWSTR name, PVOID ctx, PEVENT_RECORD_CALLBACK cb) {
+    EVENT_TRACE_LOGFILEW trace = {0};
+    trace.LoggerName = name;
+    trace.Context = ctx;
     trace.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
     trace.EventRecordCallback = cb;
 
-    TRACEHANDLE hTrace = OpenTrace(&trace);
-    if (INVALID_PROCESSTRACE_HANDLE == hTrace) {
-        return GetLastError();
-    }
-
-    // TODO: named constants.
-    return ProcessTrace(&hTrace, 1, 0, 0);
+    return OpenTraceW(&trace);
 }
 
 // GetPropertyLength returns an associated length of the @j-th property of @pInfo.

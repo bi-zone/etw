@@ -12,9 +12,8 @@
 #include <tdh.h>
 #include <in6addr.h>
 
-ULONG StartSession(char* sessionName, PVOID context, PEVENT_RECORD_CALLBACK cb);
-
 // Helpers for event property parsing.
+TRACEHANDLE OpenTraceHelper(LPWSTR name, PVOID ctx, PEVENT_RECORD_CALLBACK cb);
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info, int index);
 USHORT GetInType(PTRACE_EVENT_INFO info, int index);
 USHORT GetOutType(PTRACE_EVENT_INFO info, int index);
