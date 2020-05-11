@@ -142,14 +142,14 @@ func (s *Session) createETWSession() error {
 	// The only way to do it in go -- unsafe cast of the allocated memory.
 	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
 	bufSize := eventPropertiesSize + len(s.etwSessionName)*int(unsafe.Sizeof(s.etwSessionName[0]))
-	propertiesBuf := make([]byte, bufSize)
+	s.propertiesBuf = make([]byte, bufSize)
 
 	// We will use Query Performance Counter for timestamp cos it gives us higher
 	// time resolution. Event timestamps however would be converted to the common
 	// FileTime due to absence of PROCESS_TRACE_MODE_RAW_TIMESTAMP in LogFileMode.
 	//
 	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_properties
-	pProperties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&propertiesBuf[0]))
+	pProperties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.propertiesBuf[0]))
 	pProperties.Wnode.BufferSize = C.ulong(bufSize)
 	pProperties.Wnode.ClientContext = 1 // QPC for event Timestamp
 	pProperties.Wnode.Flags = C.WNODE_FLAG_TRACED_GUID
