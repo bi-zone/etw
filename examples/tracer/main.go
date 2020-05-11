@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"golang.org/x/sys/windows"
 
@@ -12,49 +15,53 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatalf("Usage ./trace-session.exe <providerGUID>")
+	var (
+		optSilent = flag.Bool("silent", false, "Send logs to stderr")
+		optHeader = flag.Bool("header", false, "Show event header in output")
+	)
+	flag.Parse()
+
+	if flag.NArg() != 1 {
+		log.Fatalf("Usage: %s [opts] <providerGUID>", filepath.Base(os.Args[0]))
+	}
+	if *optSilent {
+		log.SetOutput(ioutil.Discard)
 	}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
 	cb := func(e *etw.Event) {
-		log.Printf("Event %d from %s\n", e.Header.Id, e.Header.TimeStamp)
-		if e.Header.Id != 11 {
-			return
-		}
-		_ = enc.Encode(e.Header)
+		log.Printf("[DBG] Event %d from %s\n", e.Header.Id, e.Header.TimeStamp)
 
-		ext := e.ExtendedInfo()
-		if ext.UserSID != nil {
-			acc, _, _, _ := ext.UserSID.LookupAccount("")
-			log.Printf("Event from %s -- %s\n", ext.UserSID.String(), acc)
+		event := make(map[string]interface{})
+		if *optHeader {
+			event["Header"] = e.Header
 		}
-		_ = enc.Encode(ext)
 		if data, err := e.EventProperties(); err == nil {
-			_ = enc.Encode(data)
+			event["EventProperties"] = data
+		} else {
+			log.Printf("[ERR] Failed to enumerate event properties: %s", err)
 		}
+
+		_ = enc.Encode(event)
 	}
 
-	guid, err := windows.GUIDFromString(os.Args[1])
+	guid, err := windows.GUIDFromString(flag.Arg(0))
 	if err != nil {
 		log.Fatalf("Incorrect GUID given; %s", err)
 	}
-
-	session := etw.NewSession(guid, cb,
-		etw.WithMatchKeywords(0x8000000000000000, 0x8000000000000000),
-		etw.WithProperty(etw.EVENT_ENABLE_PROPERTY_SID))
+	session := etw.NewSession(guid, cb)
 
 	go func() {
-		log.Printf("Starting to listen ETW events from %s", guid)
+		log.Printf("[DBG] Starting to listen ETW events from %s", guid)
 
 		// Block until .Close().
 		if err := session.SubscribeAndServe(); err != nil {
 			log.Fatalf("Failed to SubscribeAndServe; %s", err)
 		}
 
-		log.Printf("Succesfully shut down")
+		log.Printf("[DBG] Succesfully shut down")
 	}()
 
 	// Trap cancellation (the only signal values guaranteed to be present in
@@ -64,11 +71,11 @@ func main() {
 
 	// Wait for stop and shutdown gracefully.
 	for _ = range sigCh {
-		log.Printf("Shutting the session down")
+		log.Printf("[DBG] Shutting the session down")
 
 		err = session.Close()
 		if err != nil {
-			log.Printf("(!!!) Failed to stop session: %s\n", err)
+			log.Printf("[ERR] (!!!) Failed to stop session: %s\n", err)
 		} else {
 			return
 		}
