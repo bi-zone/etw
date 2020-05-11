@@ -19,16 +19,12 @@ func main() {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
-	guid, err := windows.GUIDFromString(os.Args[1])
-	if err != nil {
-		log.Fatalf("Incorrect GUID given; %s", err)
-	}
-
-	session := etw.NewSession(guid, func(e *etw.Event) {
+	cb := func(e *etw.Event) {
 		log.Printf("Event %d from %s\n", e.Header.Id, e.Header.TimeStamp)
 		if e.Header.Id != 11 {
 			return
 		}
+		_ = enc.Encode(e.Header)
 
 		ext := e.ExtendedInfo()
 		if ext.UserSID != nil {
@@ -39,7 +35,16 @@ func main() {
 		if data, err := e.EventProperties(); err == nil {
 			_ = enc.Encode(data)
 		}
-	})
+	}
+
+	guid, err := windows.GUIDFromString(os.Args[1])
+	if err != nil {
+		log.Fatalf("Incorrect GUID given; %s", err)
+	}
+
+	session := etw.NewSession(guid, cb,
+		etw.WithMatchKeywords(0x8000000000000000, 0x8000000000000000),
+		etw.WithProperty(etw.EVENT_ENABLE_PROPERTY_SID))
 
 	go func() {
 		log.Printf("Starting to listen ETW events from %s", guid)

@@ -26,6 +26,8 @@ type Session struct {
 	config   SessionOptions
 	callback EventCallback
 
+	initMx         sync.Mutex
+	started        bool
 	etwSessionName []uint16
 	hSession       C.TRACEHANDLE
 	propertiesBuf  []byte
@@ -54,6 +56,8 @@ func NewSession(providerGUID windows.GUID, cb EventCallback, options ...Option) 
 // SubscribeAndServe starts event consuming from session.
 // N.B. Blocking!
 func (s *Session) SubscribeAndServe() error {
+	s.initMx.Lock()
+
 	utf16Name, err := windows.UTF16FromString(s.config.Name)
 	if err != nil {
 		return fmt.Errorf("incorrect session name; %w", err) // unlikely
@@ -71,62 +75,37 @@ func (s *Session) SubscribeAndServe() error {
 
 	cgoKey := newCallbackKey(s)
 	defer freeCallbackKey(cgoKey)
+	s.started = true
+
+	s.initMx.Unlock()
 
 	// Will block here until being closed.
-	if err := s.startConsuming(cgoKey); err != nil {
+	if err := s.processEvents(cgoKey); err != nil {
 		return fmt.Errorf("error processing events; %w", err)
 	}
+
+	s.started = false
 	return nil
 }
 
 // Close stops trace session and frees associated resources.
 func (s *Session) Close() error {
-	// "Be sure to disable all providers before stopping the session."
-	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
+	s.initMx.Lock()
+	defer s.initMx.Unlock()
 
-	// ULONG WMIAPI EnableTraceEx2(
-	//	TRACEHANDLE              TraceHandle,
-	//	LPCGUID                  ProviderId,
-	//	ULONG                    ControlCode,
-	//	UCHAR                    Level,
-	//	ULONGLONG                MatchAnyKeyword,
-	//	ULONGLONG                MatchAllKeyword,
-	//	ULONG                    Timeout,
-	//	PENABLE_TRACE_PARAMETERS EnableParameters
-	// );
-
-	ret := C.EnableTraceEx2(
-		s.hSession,
-		(*C.GUID)(unsafe.Pointer(&s.guid)),
-		C.EVENT_CONTROL_CODE_DISABLE_PROVIDER,
-		C.uchar(TRACE_LEVEL_VERBOSE), // TODO use config here
-		0,                            // TODO use config here
-		0,                            // TODO use config here
-		0,                            // TODO use config here
-		nil)
-
-	// ULONG WMIAPI ControlTraceW(
-	//  TRACEHANDLE             TraceHandle,
-	//  LPCWSTR                 InstanceName,
-	//  PEVENT_TRACE_PROPERTIES Properties,
-	//  ULONG                   ControlCode
-	// );
-	ret = C.ControlTraceW(
-		s.hSession,
-		nil,
-		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.propertiesBuf[0])),
-		C.EVENT_TRACE_CONTROL_STOP)
-
-	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
-	// already stopped the session before generating this error.
-	// https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew
-	switch status := windows.Errno(ret); status {
-	case windows.ERROR_MORE_DATA, windows.ERROR_SUCCESS:
-		// All ok.
-	default:
-		return fmt.Errorf("failed to stop session; %w", status)
+	if !s.started {
+		return fmt.Errorf("session is not started yet")
 	}
 
+	// "Be sure to disable all providers before stopping the session."
+	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
+	if err := s.unsubscribeFromProvider(); err != nil {
+		return fmt.Errorf("failed to disable provider; %w", err)
+	}
+
+	if err := s.stopSession(); err != nil {
+		return fmt.Errorf("failed to stop session; %w", err)
+	}
 	return nil
 }
 
@@ -165,6 +144,7 @@ func (s *Session) createETWSession() error {
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
 		return fmt.Errorf("StartTrace failed; %w", status)
 	}
+	s.propertiesBuf = propertiesBuf
 
 	return nil
 }
@@ -206,7 +186,33 @@ func (s *Session) subscribeToProvider() error {
 	return nil
 }
 
-func (s *Session) startConsuming(callbackContextKey uintptr) error {
+func (s *Session) unsubscribeFromProvider() error {
+	// ULONG WMIAPI EnableTraceEx2(
+	//	TRACEHANDLE              TraceHandle,
+	//	LPCGUID                  ProviderId,
+	//	ULONG                    ControlCode,
+	//	UCHAR                    Level,
+	//	ULONGLONG                MatchAnyKeyword,
+	//	ULONGLONG                MatchAllKeyword,
+	//	ULONG                    Timeout,
+	//	PENABLE_TRACE_PARAMETERS EnableParameters
+	// );
+	ret := C.EnableTraceEx2(
+		s.hSession,
+		(*C.GUID)(unsafe.Pointer(&s.guid)),
+		C.EVENT_CONTROL_CODE_DISABLE_PROVIDER,
+		0,
+		0,
+		0,
+		0,
+		nil)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return status
+	}
+	return nil
+}
+
+func (s *Session) processEvents(callbackContextKey uintptr) error {
 	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-opentracew
 	traceHandle := C.OpenTraceHelper(
 		(C.LPWSTR)(unsafe.Pointer(&s.etwSessionName[0])),
@@ -237,6 +243,30 @@ func (s *Session) startConsuming(callbackContextKey uintptr) error {
 		return nil // Cancelled is obviously ok when we block until closing.
 	default:
 		return fmt.Errorf("ProcessTrace failed; %w", status)
+	}
+}
+
+func (s *Session) stopSession() error {
+	// ULONG WMIAPI ControlTraceW(
+	//  TRACEHANDLE             TraceHandle,
+	//  LPCWSTR                 InstanceName,
+	//  PEVENT_TRACE_PROPERTIES Properties,
+	//  ULONG                   ControlCode
+	// );
+	ret := C.ControlTraceW(
+		s.hSession,
+		nil,
+		(C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&s.propertiesBuf[0])),
+		C.EVENT_TRACE_CONTROL_STOP)
+
+	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
+	// already stopped the session before generating this error.
+	// https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew
+	switch status := windows.Errno(ret); status {
+	case windows.ERROR_MORE_DATA, windows.ERROR_SUCCESS:
+		return nil
+	default:
+		return status
 	}
 }
 

@@ -16,6 +16,31 @@ type SessionOptions struct {
 	EnableProperties []EnableProperty
 }
 
+func WithName(name string) Option {
+	return func(cfg *SessionOptions) {
+		cfg.Name = name
+	}
+}
+
+func WithLevel(lvl TraceLevel) Option {
+	return func(cfg *SessionOptions) {
+		cfg.Level = lvl
+	}
+}
+
+func WithMatchKeywords(anyKeyword, allKeyword uint64) Option {
+	return func(cfg *SessionOptions) {
+		cfg.MatchAnyKeyword = anyKeyword
+		cfg.MatchAllKeyword = allKeyword
+	}
+}
+
+func WithProperty(p EnableProperty) Option {
+	return func(cfg *SessionOptions) {
+		cfg.EnableProperties = append(cfg.EnableProperties, p)
+	}
+}
+
 type TraceLevel C.UCHAR
 
 const (
