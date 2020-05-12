@@ -1,6 +1,6 @@
 //+build windows
 
-package tracing_session
+package etw
 
 /*
 #include "session.h"

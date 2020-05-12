@@ -1,4 +1,4 @@
-module github.com/MashaSamoylova/tracing-session
+module github.com/bi-zone/etw
 
 go 1.13
 

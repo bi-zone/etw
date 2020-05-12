@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	etw "github.com/MashaSamoylova/tracing-session"
+	"github.com/bi-zone/etw"
 )
 
 func main() {
