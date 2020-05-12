@@ -1,3 +1,5 @@
+//+build windows
+
 package tracing_session
 
 /*
@@ -25,11 +27,11 @@ type Event struct {
 // EventHeader consists common event information.
 type EventHeader struct {
 	EventDescriptor
-	ThreadId   uint32
-	ProcessId  uint32
+	ThreadID   uint32
+	ProcessID  uint32
 	TimeStamp  time.Time
 	ProviderID windows.GUID
-	ActivityId windows.GUID
+	ActivityID windows.GUID
 
 	Flags         uint16
 	KernelTime    uint32
@@ -51,7 +53,7 @@ func (h EventHeader) HasCPUTime() bool {
 // EventDescriptor is Go-analog of EVENT_DESCRIPTOR structure.
 // https://docs.microsoft.com/ru-ru/windows/win32/api/evntprov/ns-evntprov-event_descriptor
 type EventDescriptor struct {
-	Id      uint16
+	ID      uint16
 	Version uint8
 	Channel uint8
 	Level   uint8
@@ -88,8 +90,8 @@ func (e *Event) EventProperties() (map[string]interface{}, error) {
 }
 
 type ExtendedEventInfo struct {
-	SessionId    *uint32
-	ActivityId   *windows.GUID
+	SessionID    *uint32
+	ActivityID   *windows.GUID
 	UserSID      *windows.SID
 	InstanceInfo *EventInstanceInfo
 	StackTrace   *EventStackTrace
@@ -97,8 +99,8 @@ type ExtendedEventInfo struct {
 
 type EventInstanceInfo struct {
 	InstanceID       uint32
-	ParentInstanceId uint32
-	ParentGuid       windows.GUID
+	ParentInstanceID uint32
+	ParentGUID       windows.GUID
 }
 
 type EventStackTrace struct {
@@ -122,8 +124,8 @@ func (e *Event) parseExtendedInfo() ExtendedEventInfo {
 		switch C.GetExtType(e.eventRecord.ExtendedData, C.int(i)) {
 		case C.EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITYID:
 			cGUID := (C.LPGUID)(dataPtr)
-			goGUID := windowsGuidToGo(*cGUID)
-			extendedData.ActivityId = &goGUID
+			goGUID := windowsGUIDToGo(*cGUID)
+			extendedData.ActivityID = &goGUID
 
 		case C.EVENT_HEADER_EXT_TYPE_SID:
 			cSID := (*C.SID)(dataPtr)
@@ -135,14 +137,14 @@ func (e *Event) parseExtendedInfo() ExtendedEventInfo {
 		case C.EVENT_HEADER_EXT_TYPE_TS_ID:
 			cSessionID := (C.PULONG)(dataPtr)
 			goSessionID := uint32(*cSessionID)
-			extendedData.SessionId = &goSessionID
+			extendedData.SessionID = &goSessionID
 
 		case C.EVENT_HEADER_EXT_TYPE_INSTANCE_INFO:
 			instanceInfo := (C.PEVENT_EXTENDED_ITEM_INSTANCE)(dataPtr)
 			extendedData.InstanceInfo = &EventInstanceInfo{
 				InstanceID:       uint32(instanceInfo.InstanceId),
-				ParentInstanceId: uint32(instanceInfo.ParentInstanceId),
-				ParentGuid:       windowsGuidToGo(instanceInfo.ParentGuid),
+				ParentInstanceID: uint32(instanceInfo.ParentInstanceId),
+				ParentGUID:       windowsGUIDToGo(instanceInfo.ParentGuid),
 			}
 
 		case C.EVENT_HEADER_EXT_TYPE_STACK_TRACE32:
@@ -384,7 +386,7 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (uns
 	return unsafe.Pointer(&mapInfo[0]), nil
 }
 
-func windowsGuidToGo(guid C.GUID) windows.GUID {
+func windowsGUIDToGo(guid C.GUID) windows.GUID {
 	var data4 [8]byte
 	for i := range data4 {
 		data4[i] = byte(guid.Data4[i])

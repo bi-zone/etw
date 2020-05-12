@@ -1,3 +1,5 @@
+//+build windows
+
 package tracing_session
 
 /*
@@ -178,8 +180,10 @@ func (s *Session) subscribeToProvider() error {
 		C.UCHAR(s.config.Level),
 		C.ULONGLONG(s.config.MatchAnyKeyword),
 		C.ULONGLONG(s.config.MatchAllKeyword),
-		0, // Timeout set to zero to enable the trace asynchronously
-		&params)
+		0,       // Timeout set to zero to enable the trace asynchronously
+		&params, //nolint:gocritic // TODO: dupSubExpr?? gocritic bug?
+	)
+
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
 		return fmt.Errorf("EVENT_CONTROL_CODE_ENABLE_PROVIDER failed; %w", status)
 	}
@@ -235,7 +239,7 @@ func (s *Session) processEvents(callbackContextKey uintptr) error {
 	ret := C.ProcessTrace(
 		C.PTRACEHANDLE(&traceHandle),
 		1,   // ^ Imagine we pass an array with 1 element here.
-		nil, // Do not want to limit StartTime.
+		nil, // Do not want to limit StartTime (default is from now).
 		nil, // Do not want to limit EndTime.
 	)
 	switch status := windows.Errno(ret); status {
@@ -288,6 +292,8 @@ func randomName() string {
 // We can't pass Go-land pointers to the C-world so we use a classical trick
 // storing real pointers inside global map and passing to C "fake pointers"
 // which are actually map keys.
+//
+//nolint:gochecknoglobals
 var (
 	sessions       sync.Map
 	sessionCounter uintptr
@@ -327,11 +333,11 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
 	return EventHeader{
 		EventDescriptor: eventDescriptorToGo(header.EventDescriptor),
-		ThreadId:        uint32(header.ThreadId),
-		ProcessId:       uint32(header.ProcessId),
+		ThreadID:        uint32(header.ThreadId),
+		ProcessID:       uint32(header.ProcessId),
 		TimeStamp:       stampToTime(C.GetTimeStamp(header)),
-		ProviderID:      windowsGuidToGo(header.ProviderId),
-		ActivityId:      windowsGuidToGo(header.ActivityId),
+		ProviderID:      windowsGUIDToGo(header.ProviderId),
+		ActivityID:      windowsGUIDToGo(header.ActivityId),
 
 		Flags:         uint16(header.Flags),
 		KernelTime:    uint32(C.GetKernelTime(header)),
@@ -343,7 +349,7 @@ func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {
 // eventDescriptorToGo converts windows EVENT_DESCRIPTOR to go structure.
 func eventDescriptorToGo(descriptor C.EVENT_DESCRIPTOR) EventDescriptor {
 	return EventDescriptor{
-		Id:      uint16(descriptor.Id),
+		ID:      uint16(descriptor.Id),
 		Version: uint8(descriptor.Version),
 		Channel: uint8(descriptor.Channel),
 		Level:   uint8(descriptor.Level),

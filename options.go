@@ -1,3 +1,5 @@
+//+build windows
+
 package tracing_session
 
 /*
@@ -43,6 +45,7 @@ func WithProperty(p EnableProperty) Option {
 
 type TraceLevel C.UCHAR
 
+//nolint:golint,stylecheck // All caps names
 const (
 	TRACE_LEVEL_CRITICAL    = TraceLevel(1)
 	TRACE_LEVEL_ERROR       = TraceLevel(2)
@@ -53,6 +56,7 @@ const (
 
 type EnableProperty C.ULONG
 
+//nolint:golint,stylecheck // All caps names
 const (
 	EVENT_ENABLE_PROPERTY_SID               = EnableProperty(0x001)
 	EVENT_ENABLE_PROPERTY_TS_ID             = EnableProperty(0x002)

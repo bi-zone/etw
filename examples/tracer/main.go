@@ -1,3 +1,5 @@
+//+build windows
+
 package main
 
 import (
@@ -32,7 +34,7 @@ func main() {
 	enc.SetIndent("", "  ")
 
 	cb := func(e *etw.Event) {
-		log.Printf("[DBG] Event %d from %s\n", e.Header.Id, e.Header.TimeStamp)
+		log.Printf("[DBG] Event %d from %s\n", e.Header.ID, e.Header.TimeStamp)
 
 		event := make(map[string]interface{})
 		if *optHeader {
