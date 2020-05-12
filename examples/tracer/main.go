@@ -63,7 +63,7 @@ func main() {
 			log.Fatalf("Failed to SubscribeAndServe; %s", err)
 		}
 
-		log.Printf("[DBG] Succesfully shut down")
+		log.Printf("[DBG] Successfully shut down")
 	}()
 
 	// Trap cancellation (the only signal values guaranteed to be present in
@@ -72,7 +72,7 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt)
 
 	// Wait for stop and shutdown gracefully.
-	for _ = range sigCh {
+	for range sigCh {
 		log.Printf("[DBG] Shutting the session down")
 
 		err = session.Close()
