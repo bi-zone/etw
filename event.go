@@ -204,7 +204,7 @@ func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
 	// Retrieve a buffer size.
 	ret := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
 	if windows.Errno(ret) == windows.ERROR_INSUFFICIENT_BUFFER {
-		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.ulonglong(bufferSize)))
+		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.size_t(bufferSize)))
 		if pInfo == nil {
 			return nil, fmt.Errorf("malloc(%v) failed", bufferSize)
 		}

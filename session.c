@@ -64,7 +64,7 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UI
 
 
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
-    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
+    return (ULONGLONG)(SIZE_T)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
 
 USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
