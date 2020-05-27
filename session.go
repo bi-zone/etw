@@ -6,10 +6,6 @@ package etw
 #cgo LDFLAGS: -ltdh
 
 #include "session.h"
-
-// handleEvent is exported from Go to CGO to guarantee C calling convention
-// to be able to pass as a C callback function.
-extern void handleEvent(PEVENT_RECORD e);
 */
 import "C"
 import (
@@ -86,7 +82,10 @@ func (s *Session) SubscribeAndServe() error {
 		return fmt.Errorf("error processing events; %w", err)
 	}
 
+	s.initMx.Lock()
 	s.started = false
+	s.initMx.Unlock()
+
 	return nil
 }
 
@@ -221,7 +220,6 @@ func (s *Session) processEvents(callbackContextKey uintptr) error {
 	traceHandle := C.OpenTraceHelper(
 		(C.LPWSTR)(unsafe.Pointer(&s.etwSessionName[0])),
 		(C.PVOID)(callbackContextKey),
-		C.PEVENT_RECORD_CALLBACK(C.handleEvent),
 	)
 	if C.INVALID_PROCESSTRACE_HANDLE == traceHandle {
 		return fmt.Errorf("OpenTraceW failed; %w", windows.GetLastError())
@@ -312,8 +310,10 @@ func freeCallbackKey(key uintptr) {
 	sessions.Delete(key)
 }
 
-// handleEvent is exported to guarantee C calling convention and pass it as a
-// callback to the ETW API.
+// handleEvent is exported to guarantee C calling convention (cdecl).
+//
+// The function should be defined here but would be linked and used inside
+// C code in `session.c`.
 //
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {

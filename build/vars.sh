@@ -3,11 +3,16 @@
 export GOOS=windows
 export CGO_ENABLED=1
 
+GOARCH=$(go env GOARCH)
 case "${GOARCH}" in
-x64)
+amd64)
   export CC=x86_64-w64-mingw32-gcc
   ;;
-x86)
+386)
   export CC=i686-w64-mingw32-gcc
+  ;;
+*)
+  echo "Unsupported GOARCH==${GOARCH}"
+  exit 1
   ;;
 esac
