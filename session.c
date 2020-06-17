@@ -21,49 +21,72 @@ TRACEHANDLE OpenTraceHelper(LPWSTR name, PVOID ctx) {
     return OpenTraceW(&trace);
 }
 
+int getLengthFromProperty(PEVENT_RECORD event, PROPERTY_DATA_DESCRIPTOR* dataDescriptor, UINT32* length) {
+    DWORD propertySize = 0;
+    ULONG status = ERROR_SUCCESS;
+    status = TdhGetPropertySize(event, 0, NULL, 1, dataDescriptor, &propertySize);
+    if (status != ERROR_SUCCESS) {
+        return status;
+    }
+    status = TdhGetProperty(event, 0, NULL, 1, dataDescriptor, propertySize, (PBYTE)length);
+    return status;
+}
+
+// https://docs.microsoft.com/ru-ru/windows/win32/etw/using-tdhformatproperty-to-consume-event-data
+ULONG GetArraySize(PEVENT_RECORD event, PTRACE_EVENT_INFO info, int i, UINT32* count) {
+    ULONG status = ERROR_SUCCESS;
+    PROPERTY_DATA_DESCRIPTOR dataDescriptor;
+
+    if ((info->EventPropertyInfoArray[i].Flags & PropertyParamCount) == PropertyParamCount) {
+        PROPERTY_DATA_DESCRIPTOR DataDescriptor = {0};
+        // Use the countPropertyIndex member of the EVENT_PROPERTY_INFO structure
+        // to locate the property that contains the size of the array.
+        dataDescriptor.PropertyName = GetPropertyName(info, info->EventPropertyInfoArray[i].countPropertyIndex);
+        dataDescriptor.ArrayIndex = ULONG_MAX;
+        status = getLengthFromProperty(event, &dataDescriptor, count);
+        return status;
+    }
+    else {
+        *count = info->EventPropertyInfoArray[i].count;
+        return ERROR_SUCCESS;
+    }
+}
+
 // GetPropertyLength returns an associated length of the @j-th property of @pInfo.
 // If the length is available, retrieve it here. In some cases, the length is 0.
 // This can signify that we are dealing with a variable length field such as a structure
 // or a string.
-DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UINT32* PropertyLength) {
+ULONG GetPropertyLength(PEVENT_RECORD event, PTRACE_EVENT_INFO info, int i, UINT32* propertyLength) {
     // If the property is a binary blob it can point to another property that defines the
     // blob's size. The PropertyParamLength flag tells you where the blob's size is defined.
-    if ((pInfo->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
-        PROPERTY_DATA_DESCRIPTOR DataDescriptor = {0};
-        DataDescriptor.PropertyName = GetPropertyName(pInfo, pInfo->EventPropertyInfoArray[i].lengthPropertyIndex);
-        DataDescriptor.ArrayIndex = ULONG_MAX;
-
-        DWORD PropertySize = 0;
-        ULONG status = TdhGetPropertySize(pEvent, 0, NULL, 1, &DataDescriptor, &PropertySize);
+    if ((info->EventPropertyInfoArray[i].Flags & PropertyParamLength) == PropertyParamLength) {
+        ULONG status = ERROR_SUCCESS;
+        PROPERTY_DATA_DESCRIPTOR dataDescriptor = {0};
+        dataDescriptor.PropertyName = GetPropertyName(info, info->EventPropertyInfoArray[i].lengthPropertyIndex);
+        dataDescriptor.ArrayIndex = ULONG_MAX;
+        status = getLengthFromProperty(event, &dataDescriptor, propertyLength);
         if (status != ERROR_SUCCESS) {
             return status;
         }
-
-        DWORD Length = 0;
-        status = TdhGetProperty(pEvent, 0, NULL, 1, &DataDescriptor, PropertySize, (PBYTE)&Length);
-        if (status != ERROR_SUCCESS) {
-            return status;
-        }
-        *PropertyLength = Length;
         return ERROR_SUCCESS;
     }
 
     // If the property is an IP V6 address, you must set the PropertyLength parameter to the size
     // of the IN6_ADDR structure:
     // https://docs.microsoft.com/en-us/windows/win32/api/tdh/nf-tdh-tdhformatproperty#remarks
-    USHORT inType = pInfo->EventPropertyInfoArray[i].nonStructType.InType;
-    USHORT outType = pInfo->EventPropertyInfoArray[i].nonStructType.OutType;
+    USHORT inType = info->EventPropertyInfoArray[i].nonStructType.InType;
+    USHORT outType = info->EventPropertyInfoArray[i].nonStructType.OutType;
     USHORT TDH_INTYPE_BINARY = 14; // Undefined in MinGW.
     USHORT TDH_OUTTYPE_IPV6 = 24; // Undefined in MinGW.
     if (TDH_INTYPE_BINARY == inType && TDH_OUTTYPE_IPV6 == outType) {
-        *PropertyLength = sizeof(IN6_ADDR);
+        *propertyLength = sizeof(IN6_ADDR);
         return ERROR_SUCCESS;
     }
 
     // If no special cases handled -- just return the length defined if the info.
     // In some cases, the length is 0. This can signify that we are dealing with a variable
     // length field such as a structure or a string.
-    *PropertyLength = pInfo->EventPropertyInfoArray[i].length;
+    *propertyLength = info->EventPropertyInfoArray[i].length;
     return ERROR_SUCCESS;
 }
 
@@ -73,7 +96,7 @@ DWORD GetPropertyLength(PEVENT_RECORD pEvent, PTRACE_EVENT_INFO pInfo, int i, UI
 
 
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
-    return (ULONGLONG)(SIZE_T)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
+    return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
 
 USHORT GetInType(PTRACE_EVENT_INFO info, int i) {
@@ -90,6 +113,17 @@ LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i) {
 
 int PropertyIsStruct(PTRACE_EVENT_INFO info, int i) {
     return (info->EventPropertyInfoArray[i].Flags & PropertyStruct) == PropertyStruct;
+}
+
+// Determine whether the property is an array. The property is an array
+// if the EVENT_PROPERTY_INFO.Flags member is set to PropertyParamCount
+// or the EVENT_PROPERTY_INFO.count member is greater than 1.
+//
+// https://docs.microsoft.com/en-us/windows/win32/api/tdh/nf-tdh-tdhformatproperty#remarks
+int PropertyIsArray(PTRACE_EVENT_INFO info, int i) {
+    return
+    ((info->EventPropertyInfoArray[i].Flags & PropertyParamCount) == PropertyParamCount) ||
+    (info->EventPropertyInfoArray[i].count > 1);
 }
 
 int GetStartIndex(PTRACE_EVENT_INFO info, int i) {

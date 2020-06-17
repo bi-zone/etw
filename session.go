@@ -24,8 +24,6 @@ type Session struct {
 	config   SessionOptions
 	callback EventCallback
 
-	initMx         sync.Mutex
-	started        bool
 	etwSessionName []uint16
 	hSession       C.TRACEHANDLE
 	propertiesBuf  []byte
@@ -33,10 +31,16 @@ type Session struct {
 
 type EventCallback func(e *Event)
 
-type Option func(cfg *SessionOptions)
+type ExistError struct {
+	Name string
+}
+
+func (e ExistError) Error() string {
+	return fmt.Sprintf("session %q already exist", e.Name)
+}
 
 // NewSession creates windows trace session instance.
-func NewSession(providerGUID windows.GUID, cb EventCallback, options ...Option) Session {
+func NewSession(providerGUID windows.GUID, options ...Option) (*Session, error) {
 	defaultConfig := SessionOptions{
 		Name:  "go-etw-" + randomName(),
 		Level: TRACE_LEVEL_VERBOSE,
@@ -44,60 +48,63 @@ func NewSession(providerGUID windows.GUID, cb EventCallback, options ...Option) 
 	for _, opt := range options {
 		opt(&defaultConfig)
 	}
-	return Session{
-		guid:     providerGUID,
-		config:   defaultConfig,
-		callback: cb,
+	s := Session{
+		guid:   providerGUID,
+		config: defaultConfig,
 	}
-}
-
-// SubscribeAndServe starts event consuming from session.
-// N.B. Blocking!
-func (s *Session) SubscribeAndServe() error {
-	s.initMx.Lock()
 
 	utf16Name, err := windows.UTF16FromString(s.config.Name)
 	if err != nil {
-		return fmt.Errorf("incorrect session name; %w", err) // unlikely
+		return nil, fmt.Errorf("incorrect session name; %w", err) // unlikely
 	}
 	s.etwSessionName = utf16Name
 
 	// TODO: Review the order and necessity of all setup calls.
 
 	if err := s.createETWSession(); err != nil {
-		return fmt.Errorf("failed to create ETW session; %w", err)
+		return nil, fmt.Errorf("failed to create session; %w", err)
 	}
+
+	return &s, nil
+}
+
+// Process starts event consuming from session.
+// N.B. Blocking!
+func (s *Session) Process(cb EventCallback) error {
+	s.callback = cb
+
 	if err := s.subscribeToProvider(); err != nil {
 		return fmt.Errorf("failed to subscribe to provider; %w", err)
 	}
 
 	cgoKey := newCallbackKey(s)
 	defer freeCallbackKey(cgoKey)
-	s.started = true
-
-	s.initMx.Unlock()
 
 	// Will block here until being closed.
 	if err := s.processEvents(cgoKey); err != nil {
 		return fmt.Errorf("error processing events; %w", err)
 	}
+	return nil
+}
 
-	s.initMx.Lock()
-	s.started = false
-	s.initMx.Unlock()
-
+// UpdateOptions changes session parameters on runtime.
+//
+// You can change following options:
+// - WithLevel(lvl TraceLevel)
+// - WithMatchKeywords(anyKeyword, allKeyword uint64)
+// - WithProperty(p EnableProperty)
+func (s *Session) UpdateOptions(options ...Option) error {
+	for _, opt := range options {
+		opt(&s.config)
+	}
+	if err := s.subscribeToProvider(); err != nil {
+		return err
+	}
 	return nil
 }
 
 // Close stops trace session and frees associated resources.
 func (s *Session) Close() error {
-	s.initMx.Lock()
-	defer s.initMx.Unlock()
-
-	if !s.started {
-		return fmt.Errorf("session is not started yet")
-	}
-
 	// "Be sure to disable all providers before stopping the session."
 	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
 	if err := s.unsubscribeFromProvider(); err != nil {
@@ -108,6 +115,57 @@ func (s *Session) Close() error {
 		return fmt.Errorf("failed to stop session; %w", err)
 	}
 	return nil
+}
+
+// KillSession forces the session to stop by name.
+//
+// We should unsubscribe the session from all providers before
+// stopping the session (For proper session disabling see `Close` function).
+// We didn't find the way how to get a list of providers by session name
+// using windows API. We stop the session without unsubscribing it
+// from providers.
+func KillSession(name string) error {
+	const (
+		maxLengthLogfileName = 1024
+	)
+
+	nameUTF16, err := windows.UTF16FromString(name)
+	if err != nil {
+		return fmt.Errorf("failed to convert session name to utf16")
+	}
+	sessionNameLength := len(nameUTF16) * int(unsafe.Sizeof(nameUTF16[0]))
+
+	// Initializing the empty EVENT_TRACE_PROPERTIES structure.
+	eventPropertiesSize := int(unsafe.Sizeof(C.EVENT_TRACE_PROPERTIES{}))
+	// We don't know if this session was opened with the log file or not
+	// (session could be opened without our library).
+	// That's why we allocate memory for LogFile name too.
+	bufSize := eventPropertiesSize + sessionNameLength + maxLengthLogfileName
+	propertiesBuf := make([]byte, bufSize)
+	pProperties := (C.PEVENT_TRACE_PROPERTIES)(unsafe.Pointer(&propertiesBuf[0]))
+	pProperties.Wnode.BufferSize = C.ulong(bufSize)
+
+	// ULONG WMIAPI ControlTraceW(
+	//  TRACEHANDLE             TraceHandle,
+	//  LPCWSTR                 InstanceName,
+	//  PEVENT_TRACE_PROPERTIES Properties,
+	//  ULONG                   ControlCode
+	// );
+	ret := C.ControlTraceW(
+		0,
+		(*C.ushort)(unsafe.Pointer(&nameUTF16[0])),
+		pProperties,
+		C.EVENT_TRACE_CONTROL_STOP)
+
+	// If you receive ERROR_MORE_DATA when stopping the session, ETW will have
+	// already stopped the session before generating this error.
+	// https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew
+	switch status := windows.Errno(ret); status {
+	case windows.ERROR_MORE_DATA, windows.ERROR_SUCCESS:
+		return nil
+	default:
+		return status
+	}
 }
 
 // createETWSession creates a ETW session that would manage  wraps StartTraceW.
@@ -142,12 +200,15 @@ func (s *Session) createETWSession() error {
 		C.LPWSTR(unsafe.Pointer(&s.etwSessionName[0])),
 		pProperties,
 	)
-	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
-		return fmt.Errorf("StartTrace failed; %w", status)
+	switch err := windows.Errno(ret); err {
+	case windows.ERROR_ALREADY_EXISTS:
+		return ExistError{s.config.Name}
+	case windows.ERROR_SUCCESS:
+		s.propertiesBuf = propertiesBuf
+		return nil
+	default:
+		return fmt.Errorf("StartTrace failed; %w", err)
 	}
-	s.propertiesBuf = propertiesBuf
-
-	return nil
 }
 
 // subscribeToProvider wraps EnableTraceEx2.
@@ -209,10 +270,12 @@ func (s *Session) unsubscribeFromProvider() error {
 		0,
 		0,
 		nil)
-	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
-		return status
+	status := windows.Errno(ret)
+	switch status {
+	case windows.ERROR_SUCCESS, windows.ERROR_NOT_FOUND:
+		return nil
 	}
-	return nil
+	return status
 }
 
 func (s *Session) processEvents(callbackContextKey uintptr) error {

@@ -11,9 +11,8 @@ import (
 	"os/signal"
 	"path/filepath"
 
-	"golang.org/x/sys/windows"
-
 	"github.com/bi-zone/etw"
+	"golang.org/x/sys/windows"
 )
 
 func main() {
@@ -33,9 +32,17 @@ func main() {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 
+	guid, err := windows.GUIDFromString(flag.Arg(0))
+	if err != nil {
+		log.Fatalf("Incorrect GUID given; %s", err)
+	}
+	session, err := etw.NewSession(guid)
+	if err != nil {
+		log.Fatalf("Failed to create etw session; %s", err)
+	}
+
 	cb := func(e *etw.Event) {
 		log.Printf("[DBG] Event %d from %s\n", e.Header.ID, e.Header.TimeStamp)
-
 		event := make(map[string]interface{})
 		if *optHeader {
 			event["Header"] = e.Header
@@ -48,18 +55,11 @@ func main() {
 
 		_ = enc.Encode(event)
 	}
-
-	guid, err := windows.GUIDFromString(flag.Arg(0))
-	if err != nil {
-		log.Fatalf("Incorrect GUID given; %s", err)
-	}
-	session := etw.NewSession(guid, cb)
-
 	go func() {
 		log.Printf("[DBG] Starting to listen ETW events from %s", guid)
 
 		// Block until .Close().
-		if err := session.SubscribeAndServe(); err != nil {
+		if err := session.Process(cb); err != nil {
 			log.Fatalf("Failed to SubscribeAndServe; %s", err)
 		}
 

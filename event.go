@@ -267,24 +267,48 @@ func (p *propertyParser) getPropertyName(i int) string {
 // parsing property value data pointer should point to the right memory.
 // eventParses controls data pointer with each GetPropertyValue call.
 func (p *propertyParser) getPropertyValue(i int) (interface{}, error) {
-	if int(C.PropertyIsStruct(p.info, C.int(i))) == 1 {
-		return p.parseComplexType(i)
+	var value interface{}
+	var err error
+
+	var arraySizeC C.uint
+	ret := C.GetArraySize(p.record, p.info, C.int(i), &arraySizeC)
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return nil, fmt.Errorf("failed to get array size; %w", status)
 	}
-	return p.parseSimpleType(i)
+	arraySize := int(arraySizeC)
+
+	result := make([]interface{}, arraySize)
+
+	for j := 0; j < arraySize; j++ {
+		if int(C.PropertyIsStruct(p.info, C.int(i))) == 1 {
+			value, err = p.parseStruct(i)
+		} else {
+			value, err = p.parseSimpleType(i)
+		}
+		if err != nil {
+			return nil, err
+		}
+		result[j] = value
+	}
+
+	if int(C.PropertyIsArray(p.info, C.int(i))) == 1 {
+		return result, nil
+	}
+	return result[0], nil
 }
 
-// TODO: Return map[string]string
-func (p *propertyParser) parseComplexType(i int) ([]string, error) {
+func (p *propertyParser) parseStruct(i int) (map[string]interface{}, error) {
 	startIndex := int(C.GetStartIndex(p.info, C.int(i)))
 	lastIndex := int(C.GetLastIndex(p.info, C.int(i)))
 
-	structure := make([]string, lastIndex-startIndex)
+	structure := make(map[string]interface{}, lastIndex-startIndex)
 	for j := startIndex; j < lastIndex; j++ {
-		value, err := p.parseSimpleType(j)
+		value, err := p.getPropertyValue(j)
+		name := p.getPropertyName(j)
 		if err != nil {
-			return nil, fmt.Errorf("failed parse field of complex property type; %s", err)
+			return nil, fmt.Errorf("failed parse field %q of complex property type; %s", name, err)
 		}
-		structure[j-startIndex] = value
+		structure[name] = value
 	}
 	return structure, nil
 }

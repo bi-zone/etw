@@ -7,8 +7,6 @@ package etw
 */
 import "C"
 
-// TODO: options, types
-
 // TODO: GO-style names for flags with appropriate description?
 type SessionOptions struct {
 	Name             string
@@ -17,6 +15,8 @@ type SessionOptions struct {
 	MatchAllKeyword  uint64
 	EnableProperties []EnableProperty
 }
+
+type Option func(cfg *SessionOptions)
 
 func WithName(name string) Option {
 	return func(cfg *SessionOptions) {
