@@ -1,0 +1,35 @@
+name: Lint & Test Go code
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - v*
+  pull_request:
+
+jobs:
+  lint:
+    # Fresh golangci-lint wont work on Windows
+    runs-on: ubuntu-latest
+    container: dockercore/golang-cross
+    
+    steps:
+    - uses: actions/checkout@v2
+
+    # Someday we'll switch to official action, but right now we depend on CGO Windows-specific stuff
+    - name: Install golangci-lint
+      run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -d -b $(go env GOPATH)/bin v1.27.0
+
+    - name: Lint the code
+      run: |
+        export PATH=$PATH:$(go env GOPATH)/bin
+        bash ./build/lint.sh
+
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Test the code
+        run: bash ./build/test.sh

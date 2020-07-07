@@ -1,5 +1,4 @@
 run:
-  concurrency: 4
   deadline: 10m
   issues-exit-code: 1
 
@@ -10,3 +9,8 @@ linters:
     - godox
     - wsl
     - gomnd
+
+issues:
+  exclude:
+    # Sometimes goerr113 is too annoying
+    - do not define dynamic errors, use wrapped static errors instead

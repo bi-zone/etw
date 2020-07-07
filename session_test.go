@@ -1,6 +1,6 @@
 // +build windows
 
-package etw
+package etw_test
 
 import (
 	"context"
@@ -9,20 +9,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Microsoft/go-winio/pkg/etw"
+	msetw "github.com/Microsoft/go-winio/pkg/etw"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/sys/windows"
+
+	"github.com/bi-zone/etw"
 )
+
+func TestSession(t *testing.T) {
+	suite.Run(t, new(testProvider))
+}
 
 type testProvider struct {
 	suite.Suite
 
-	provider *etw.Provider
+	provider *msetw.Provider
 	guid     windows.GUID
 }
 
 func (p *testProvider) SetupSuite() {
-	provider, err := etw.NewProvider("TestProvider", nil)
+	provider, err := msetw.NewProvider("TestProvider", nil)
 	p.Require().NoError(err, "Failed to initialize test provider.")
 	p.provider = provider
 	p.guid = (windows.GUID)(provider.ID)
@@ -32,37 +38,21 @@ func (p *testProvider) TearDownSuite() {
 	p.Require().NoError(p.provider.Close(), "Failed to close test provider.")
 }
 
-func (p testProvider) generateEvents(ctx context.Context, levels []etw.Level, fields ...etw.FieldOpt) {
-	if fields == nil {
-		fields = etw.WithFields(etw.StringField("TestField", "Foo"))
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			for _, l := range levels {
-				_ = p.provider.WriteEvent("TestEvent", etw.WithEventOpts(etw.WithLevel(l)), fields)
-			}
-		}
-	}
-}
-
 func (p *testProvider) TestSession_StartStop() {
 	ctx, cancel := context.WithCancel(context.Background())
-	go p.generateEvents(ctx, []etw.Level{etw.LevelInfo})
+	go p.generateEvents(ctx, []msetw.Level{msetw.LevelInfo})
 	defer func() {
 		cancel()
 	}()
 
-	session, err := NewSession(p.guid)
+	session, err := etw.NewSession(p.guid)
 	if err != nil {
 		p.Fail("Failed to create session", "%s", err)
 	}
 
 	gotEvent := make(chan struct{})
 	var once sync.Once
-	cb := func(e *Event) {
+	cb := func(_ *etw.Event) {
 		once.Do(func() { close(gotEvent) })
 	}
 
@@ -100,12 +90,12 @@ func (p *testProvider) TestSession_StartStop() {
 
 func (p *testProvider) TestUpdating() {
 	ctx, cancel := context.WithCancel(context.Background())
-	go p.generateEvents(ctx, []etw.Level{etw.LevelInfo, etw.LevelCritical})
+	go p.generateEvents(ctx, []msetw.Level{msetw.LevelInfo, msetw.LevelCritical})
 	defer func() {
 		cancel()
 	}()
 
-	session, err := NewSession(p.guid, WithLevel(TRACE_LEVEL_CRITICAL))
+	session, err := etw.NewSession(p.guid, etw.WithLevel(etw.TRACE_LEVEL_CRITICAL))
 	if err != nil {
 		p.Require().NoError(err, "Failed to create session")
 	}
@@ -113,14 +103,14 @@ func (p *testProvider) TestUpdating() {
 	// callback signals about event level through corresponding channels.
 	gotCriticalEvent := make(chan struct{}, 1)
 	gotInformationEvent := make(chan struct{}, 1)
-	cb := func(e *Event) {
-		switch TraceLevel(e.Header.Level) {
-		case TRACE_LEVEL_INFORMATION:
+	cb := func(e *etw.Event) {
+		switch etw.TraceLevel(e.Header.Level) {
+		case etw.TRACE_LEVEL_INFORMATION:
 			select {
 			case gotInformationEvent <- struct{}{}:
 			default:
 			}
-		case TRACE_LEVEL_CRITICAL:
+		case etw.TRACE_LEVEL_CRITICAL:
 			select {
 			case gotCriticalEvent <- struct{}{}:
 			default:
@@ -154,7 +144,7 @@ func (p *testProvider) TestUpdating() {
 		// pass
 	}
 
-	if err := session.UpdateOptions(WithLevel(TRACE_LEVEL_INFORMATION)); err != nil {
+	if err := session.UpdateOptions(etw.WithLevel(etw.TRACE_LEVEL_INFORMATION)); err != nil {
 		p.Failf("Failed to update session options", "%s", err)
 	}
 
@@ -186,16 +176,16 @@ func (p *testProvider) TestParsing() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go p.generateEvents(
 		ctx,
-		[]etw.Level{etw.LevelInfo},
-		etw.StringField("string", "string value"),
-		etw.StringArray("stringArray", []string{"1", "2", "3"}),
-		etw.Float64Field("float64", 45.7),
-		etw.Struct("struct",
-			etw.StringField("string", "string value"),
-			etw.Float64Field("float64", 46.7),
-			etw.Struct("subStructure",
-				etw.StringField("string", "string value"))),
-		etw.StringArray("anotherArray", []string{"3", "4"}),
+		[]msetw.Level{msetw.LevelInfo},
+		msetw.StringField("string", "string value"),
+		msetw.StringArray("stringArray", []string{"1", "2", "3"}),
+		msetw.Float64Field("float64", 45.7),
+		msetw.Struct("struct",
+			msetw.StringField("string", "string value"),
+			msetw.Float64Field("float64", 46.7),
+			msetw.Struct("subStructure",
+				msetw.StringField("string", "string value"))),
+		msetw.StringArray("anotherArray", []string{"3", "4"}),
 	)
 
 	expectedMap := map[string]interface{}{
@@ -219,13 +209,13 @@ func (p *testProvider) TestParsing() {
 		cancel()
 	}()
 
-	session, err := NewSession(p.guid, WithLevel(TRACE_LEVEL_VERBOSE))
+	session, err := etw.NewSession(p.guid, etw.WithLevel(etw.TRACE_LEVEL_VERBOSE))
 	if err != nil {
 		p.Require().NoError(err, "Failed to create session")
 	}
 
 	propCh := make(chan map[string]interface{}, 1)
-	cb := func(e *Event) {
+	cb := func(e *etw.Event) {
 		properties, _ := e.EventProperties()
 		select {
 		case propCh <- properties:
@@ -240,7 +230,7 @@ func (p *testProvider) TestParsing() {
 		close(done)
 	}()
 
-	deadline := 10 * time.Second
+	deadline := 20 * time.Second
 	select {
 	case properties := <-propCh:
 		p.Equal(expectedMap, properties, "Received unexpected properties")
@@ -259,22 +249,21 @@ func (p *testProvider) TestParsing() {
 	case <-time.After(deadline):
 		p.Fail("Failed to stop event processing", "deadline %s exceeded", deadline.String())
 	}
-
 }
 
 func (p *testProvider) TestKillSession() {
 	const sessionName = "Suicide session"
 
 	// Creating the session.
-	session, err := NewSession(p.guid, WithName(sessionName))
+	_, err := etw.NewSession(p.guid, etw.WithName(sessionName))
 	if err != nil {
 		p.Fail("Failed to create session", "%s", err)
 	}
 
 	// Ensure attempt of creating a session with the
 	// same name fails with ExistError.
-	_, err = NewSession(p.guid, WithName(sessionName))
-	var exists ExistError
+	_, err = etw.NewSession(p.guid, etw.WithName(sessionName))
+	var exists etw.ExistError
 	if !errors.As(err, &exists) {
 		p.Fail(
 			"The attempt of creating a session with the same name failed with not expected err",
@@ -282,13 +271,13 @@ func (p *testProvider) TestKillSession() {
 	}
 
 	// Killing the session by name.
-	if err := KillSession(sessionName); err != nil {
+	if err := etw.KillSession(sessionName); err != nil {
 		p.Fail("Failed to force stop session", "%s", err)
 	}
 
 	// Trying to create new session with the same name.
 	// Then stop the session properly.
-	session, err = NewSession(p.guid, WithName(sessionName))
+	session, err := etw.NewSession(p.guid, etw.WithName(sessionName))
 	if err != nil {
 		p.Fail("Failed to create session", "%s", err)
 	}
@@ -298,6 +287,18 @@ func (p *testProvider) TestKillSession() {
 	}
 }
 
-func TestSession(t *testing.T) {
-	suite.Run(t, new(testProvider))
+func (p testProvider) generateEvents(ctx context.Context, levels []msetw.Level, fields ...msetw.FieldOpt) {
+	if fields == nil {
+		fields = msetw.WithFields(msetw.StringField("TestField", "Foo"))
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			for _, l := range levels {
+				_ = p.provider.WriteEvent("TestEvent", msetw.WithEventOpts(msetw.WithLevel(l)), fields)
+			}
+		}
+	}
 }
