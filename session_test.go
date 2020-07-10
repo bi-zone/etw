@@ -121,8 +121,7 @@ func (s *sessionSuite) TestUpdating() {
 	err = session.UpdateOptions(etw.WithLevel(etw.TRACE_LEVEL_INFORMATION))
 	s.Require().NoError(err, "Failed to update session options")
 
-	// Ensure option updates are applied:
-	// after options updating, we should receive events with both levels.
+	// If the options update was successfully applied we should catch event with INFO level too.
 	s.waitForSignal(gotInformationEvent, deadline,
 		"Failed to receive event with INFO level after updating session options")
 
@@ -176,7 +175,7 @@ func (s *sessionSuite) TestParsing() {
 	)
 	cb := func(e *etw.Event) {
 		properties, err = e.EventProperties()
-		s.Assert().NoError(err, "Got error parsing event properties")
+		s.Require().NoError(err, "Got error parsing event properties")
 		s.trySignal(gotProps)
 	}
 
@@ -202,13 +201,13 @@ func (s *sessionSuite) TestKillSession() {
 	_, err := etw.NewSession(s.guid, etw.WithName(sessionName))
 	s.Require().NoError(err, "Failed to create session with name %s", sessionName)
 
-	// Ensure we've got ExistError creating a session with the same name.
+	// Ensure we've got ExistsError creating a session with the same name.
 	_, err = etw.NewSession(s.guid, etw.WithName(sessionName))
 	s.Require().Error(err)
 
-	var exists etw.ExistError
+	var exists etw.ExistsError
 	s.Require().True(errors.As(err, &exists), "Got unexpected error starting session with a same name")
-	s.Equal(exists.Name, sessionName, "Got unexpected name in etw.ExistError")
+	s.Equal(exists.SessionName, sessionName, "Got unexpected name in etw.ExistsError")
 
 	// Try to force-kill the session by name.
 	s.Require().NoError(etw.KillSession(sessionName), "Failed to force stop session")
