@@ -350,8 +350,8 @@ func (p *propertyParser) getPropertyValue(i int) (interface{}, error) {
 
 // parseStruct tries to extract fields of embedded structure at property @i.
 func (p *propertyParser) parseStruct(i int) (map[string]interface{}, error) {
-	startIndex := int(C.GetStartIndex(p.info, C.int(i)))
-	lastIndex := int(C.GetLastIndex(p.info, C.int(i)))
+	startIndex := int(C.GetStructStartIndex(p.info, C.int(i)))
+	lastIndex := int(C.GetStructLastIndex(p.info, C.int(i)))
 
 	structure := make(map[string]interface{}, lastIndex-startIndex)
 	for j := startIndex; j < lastIndex; j++ {
