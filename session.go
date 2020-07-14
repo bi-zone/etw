@@ -1,5 +1,13 @@
 //+build windows
 
+// Package etw allows you to receive Event Tracing for Windows (ETW) events.
+//
+// etw allows you to process events from new TraceLogging providers as well as
+// from classic (aka EventLog) providers, so you could actually listen to
+// anything you can see in Event Viewer window.
+//
+// For possible usage examples take a look at
+// https://github.com/bi-zone/etw/tree/master/examples
 package etw
 
 /*

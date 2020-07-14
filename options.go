@@ -87,7 +87,9 @@ func WithLevel(lvl TraceLevel) Option {
 // A session will receive only those events whose keywords masks has ANY of
 // @anyKeyword and ALL of @allKeyword bits sets.
 //
-// For more info take a look a SessionOptions docs.
+// For more info take a look a SessionOptions docs. To query keywords defined
+// by specific provider identified by <GUID> try:
+//     logman query providers <GUID>
 func WithMatchKeywords(anyKeyword, allKeyword uint64) Option {
 	return func(cfg *SessionOptions) {
 		cfg.MatchAnyKeyword = anyKeyword
