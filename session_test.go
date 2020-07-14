@@ -254,12 +254,11 @@ func (s sessionSuite) generateEvents(ctx context.Context, levels []msetw.Level, 
 			return
 		default:
 			for _, l := range levels {
-				err := s.provider.WriteEvent(
+				_ = s.provider.WriteEvent(
 					"TestEvent",
 					msetw.WithEventOpts(msetw.WithLevel(l)),
 					fields,
 				)
-				s.Assert().NoError(err, "Failed to send test event")
 			}
 		}
 	}
