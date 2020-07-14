@@ -67,6 +67,10 @@ type Session struct {
 // If EventCallback can't handle all ETW events produced, OS will handle a
 // tricky file-based cache for you, however, it's recommended not to perform
 // long-running tasks inside a callback.
+//
+// N.B. Event pointer @e is valid ONLY inside a callback. You CAN'T copy a
+// whole event, only EventHeader, EventProperties and ExtendedEventInfo
+// separately.
 type EventCallback func(e *Event)
 
 // NewSession creates a Windows event tracing session instance. Session with no
@@ -421,10 +425,12 @@ func handleEvent(eventRecord C.PEVENT_RECORD) {
 		return
 	}
 
-	targetSession.(*Session).callback(&Event{
+	evt := &Event{
 		Header:      eventHeaderToGo(eventRecord.EventHeader),
 		eventRecord: eventRecord,
-	})
+	}
+	targetSession.(*Session).callback(evt)
+	evt.eventRecord = nil
 }
 
 func eventHeaderToGo(header C.EVENT_HEADER) EventHeader {

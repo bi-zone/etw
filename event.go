@@ -19,7 +19,8 @@ import (
 // that is parsed implicitly is an EventHeader (which just translated from C
 // structures mostly 1:1), all other data are parsed on-demand.
 //
-// Events will be passed to the user EventCallback.
+// Events will be passed to the user EventCallback. It's invalid to use Event
+// methods outside of an EventCallback.
 type Event struct {
 	Header      EventHeader
 	eventRecord C.PEVENT_RECORD
@@ -93,6 +94,10 @@ type EventDescriptor struct {
 //
 // Take a look at `TestParsing` for possible EventProperties values.
 func (e *Event) EventProperties() (map[string]interface{}, error) {
+	if e.eventRecord == nil {
+		return nil, fmt.Errorf("usage of Event is invalid outside of EventCallback")
+	}
+
 	if e.eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
 		return map[string]interface{}{
 			"_": C.GoString((*C.char)(e.eventRecord.UserData)),
@@ -155,6 +160,9 @@ type EventStackTrace struct {
 // If no ExtendedEventInfo is available inside an event record function returns
 // the structure with all fields set to nil.
 func (e *Event) ExtendedInfo() ExtendedEventInfo {
+	if e.eventRecord == nil { // Usage outside of event callback.
+		return ExtendedEventInfo{}
+	}
 	if e.eventRecord.EventHeader.Flags&C.EVENT_HEADER_FLAG_EXTENDED_INFO == 0 {
 		return ExtendedEventInfo{}
 	}

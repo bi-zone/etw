@@ -29,7 +29,7 @@ type sessionSuite struct {
 	guid     windows.GUID
 }
 
-func (s *sessionSuite) SetupSuite() {
+func (s *sessionSuite) SetupTest() {
 	provider, err := msetw.NewProvider("TestProvider", nil)
 	s.Require().NoError(err, "Failed to initialize test provider.")
 
@@ -39,7 +39,7 @@ func (s *sessionSuite) SetupSuite() {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 }
 
-func (s *sessionSuite) TearDownSuite() {
+func (s *sessionSuite) TearDownTest() {
 	s.cancel()
 	s.Require().NoError(s.provider.Close(), "Failed to close test provider.")
 }
@@ -216,6 +216,43 @@ func (s *sessionSuite) TestKillSession() {
 	session, err := etw.NewSession(s.guid, etw.WithName(sessionName))
 	s.Require().NoError(err, "Failed to create session after a successful kill")
 	s.Require().NoError(session.Close(), "Failed to close session properly")
+}
+
+// TestEventOutsideCallback ensures *etw.Event can't be used outside EventCallback.
+func (s *sessionSuite) TestEventOutsideCallback() {
+	const deadline = 10 * time.Second
+	go s.generateEvents(s.ctx, []msetw.Level{msetw.LevelInfo})
+
+	session, err := etw.NewSession(s.guid)
+	s.Require().NoError(err, "Failed to create session")
+
+	// Grab event pointer from the callback. We expect that outdated pointer
+	// will protect user from calling Windows API on freed memory.
+	var evt *etw.Event
+	gotEvent := make(chan struct{})
+	cb := func(e *etw.Event) {
+		// Signal on second event only to guarantee that callback with stored event will finish.
+		if evt != nil {
+			s.trySignal(gotEvent)
+		} else {
+			evt = e
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		s.Require().NoError(session.Process(cb), "Error processing events")
+		close(done)
+	}()
+
+	// Wait for event arrived and try to access event data.
+	s.waitForSignal(gotEvent, deadline, "Failed to receive event from provider")
+	s.Assert().Zero(evt.ExtendedInfo(), "Got non-nil ExtendedInfo for freed event")
+	_, err = evt.EventProperties()
+	s.Assert().Error(err, "Don't get an error using freed event")
+	s.Assert().Contains(err.Error(), "EventCallback", "Got unexpected error: %s", err)
+
+	s.Require().NoError(session.Close(), "Failed to close session properly")
+	s.waitForSignal(done, deadline, "Failed to stop event processing")
 }
 
 // trySignal tries to send a signal to @done if it's ready to receive.
