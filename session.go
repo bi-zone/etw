@@ -93,6 +93,8 @@ func (s *Session) Process(cb EventCallback) error {
 // - WithLevel(lvl TraceLevel)
 // - WithMatchKeywords(anyKeyword, allKeyword uint64)
 // - WithProperty(p EnableProperty)
+//
+// Other options are ignored.
 func (s *Session) UpdateOptions(options ...Option) error {
 	for _, opt := range options {
 		opt(&s.config)
