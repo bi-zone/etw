@@ -1,4 +1,5 @@
 #include "session.h"
+#include <in6addr.h>
 
 // handleEvent is exported from Go to CGO. Unfortunately CGO can't vary calling
 // convention of exported functions (or we don't know da way), so wrap the Go's
@@ -94,7 +95,8 @@ ULONG GetPropertyLength(PEVENT_RECORD event, PTRACE_EVENT_INFO info, int i, UINT
 // All the function below is a helpers for go code to handle dynamic arrays and unnamed unions.
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-
+// Returns ULONGLONG instead of string pointer cos event data descriptor expects exactly that
+// type.
 ULONGLONG GetPropertyName(PTRACE_EVENT_INFO info , int i) {
     return (ULONGLONG)((PBYTE)(info) + info->EventPropertyInfoArray[i].NameOffset);
 }
@@ -111,7 +113,7 @@ LPWSTR GetMapName(PTRACE_EVENT_INFO info, int i) {
     return (LPWSTR)((PBYTE)(info) + info->EventPropertyInfoArray[i].nonStructType.MapNameOffset);
 }
 
-int PropertyIsStruct(PTRACE_EVENT_INFO info, int i) {
+BOOL PropertyIsStruct(PTRACE_EVENT_INFO info, int i) {
     return (info->EventPropertyInfoArray[i].Flags & PropertyStruct) == PropertyStruct;
 }
 
@@ -120,17 +122,17 @@ int PropertyIsStruct(PTRACE_EVENT_INFO info, int i) {
 // or the EVENT_PROPERTY_INFO.count member is greater than 1.
 //
 // https://docs.microsoft.com/en-us/windows/win32/api/tdh/nf-tdh-tdhformatproperty#remarks
-int PropertyIsArray(PTRACE_EVENT_INFO info, int i) {
+BOOL PropertyIsArray(PTRACE_EVENT_INFO info, int i) {
     return
     ((info->EventPropertyInfoArray[i].Flags & PropertyParamCount) == PropertyParamCount) ||
     (info->EventPropertyInfoArray[i].count > 1);
 }
 
-int GetStartIndex(PTRACE_EVENT_INFO info, int i) {
+int GetStructStartIndex(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].structType.StructStartIndex;
 }
 
-int GetLastIndex(PTRACE_EVENT_INFO info, int i) {
+int GetStructLastIndex(PTRACE_EVENT_INFO info, int i) {
     return info->EventPropertyInfoArray[i].structType.StructStartIndex +
                     info->EventPropertyInfoArray[i].structType.NumOfStructMembers;
 }

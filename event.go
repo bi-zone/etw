@@ -3,9 +3,7 @@
 package etw
 
 /*
-#cgo LDFLAGS: -ltdh
-
-#include "session.h"
+	#include "session.h"
 */
 import "C"
 import (
@@ -17,19 +15,30 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Event represents parsing result from structure:
-// https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_record
+// Event is a single event record received from ETW provider. The only thing
+// that is parsed implicitly is an EventHeader (which just translated from C
+// structures mostly 1:1), all other data are parsed on-demand.
+//
+// Events will be passed to the user EventCallback. It's invalid to use Event
+// methods outside of an EventCallback.
 type Event struct {
 	Header      EventHeader
 	eventRecord C.PEVENT_RECORD
 }
 
-// EventHeader consists common event information.
+// EventHeader contains an information that is common for every ETW event
+// record.
+//
+// EventHeader fields is self-descriptive. If you need more info refer to the
+// original struct docs:
+// https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_header
 type EventHeader struct {
 	EventDescriptor
-	ThreadID   uint32
-	ProcessID  uint32
-	TimeStamp  time.Time
+
+	ThreadID  uint32
+	ProcessID uint32
+	TimeStamp time.Time
+
 	ProviderID windows.GUID
 	ActivityID windows.GUID
 
@@ -39,6 +48,9 @@ type EventHeader struct {
 	ProcessorTime uint64
 }
 
+// HasCPUTime returns true if the event has separate UserTime and KernelTime
+// measurements. Otherwise the value of UserTime and KernelTime is meaningless
+// and you should use ProcessorTime instead.
 func (h EventHeader) HasCPUTime() bool {
 	switch {
 	case h.Flags&C.EVENT_HEADER_FLAG_NO_CPUTIME != 0:
@@ -50,7 +62,10 @@ func (h EventHeader) HasCPUTime() bool {
 	}
 }
 
-// EventDescriptor is Go-analog of EVENT_DESCRIPTOR structure.
+// EventDescriptor contains low-level metadata that defines received event.
+// Most of fields could be used to refine events filtration.
+//
+// For detailed information about fields values refer to EVENT_DESCRIPTOR docs:
 // https://docs.microsoft.com/ru-ru/windows/win32/api/evntprov/ns-evntprov-event_descriptor
 type EventDescriptor struct {
 	ID      uint16
@@ -62,7 +77,27 @@ type EventDescriptor struct {
 	Keyword uint64
 }
 
+// EventProperties returns a map that represents events-specific data provided
+// by event producer. Returned data depends on the provider, event type and even
+// provider and event versions.
+//
+// The simplest (and the recommended) way to parse event data is to use TDH
+// family of functions that render event data to the strings exactly as you can
+// see it in the Event Viewer.
+//
+// EventProperties returns a map that could be interpreted as "structure that
+// fit inside a map". Map keys is a event data field names, map values is field
+// values rendered to strings. So map values could be one of the following:
+//		- `[]string` for arrays of any types;
+//		- `map[string]interface{}` for fields that are structures;
+//		- `string` for any other values.
+//
+// Take a look at `TestParsing` for possible EventProperties values.
 func (e *Event) EventProperties() (map[string]interface{}, error) {
+	if e.eventRecord == nil {
+		return nil, fmt.Errorf("usage of Event is invalid outside of EventCallback")
+	}
+
 	if e.eventRecord.EventHeader.Flags == C.EVENT_HEADER_FLAG_STRING_ONLY {
 		return map[string]interface{}{
 			"_": C.GoString((*C.char)(e.eventRecord.UserData)),
@@ -89,6 +124,15 @@ func (e *Event) EventProperties() (map[string]interface{}, error) {
 	return properties, nil
 }
 
+// ExtendedEventInfo contains additional information about received event. All
+// ExtendedEventInfo fields are optional and are nils being not set by provider.
+//
+// Presence of concrete fields is controlled by WithProperty option and an
+// ability of event provider to set the required fields.
+//
+// More info about fields is available at EVENT_HEADER_EXTENDED_DATA_ITEM.ExtType
+// documentation:
+// https://docs.microsoft.com/en-us/windows/win32/api/evntcons/ns-evntcons-event_header_extended_data_item
 type ExtendedEventInfo struct {
 	SessionID    *uint32
 	ActivityID   *windows.GUID
@@ -97,19 +141,28 @@ type ExtendedEventInfo struct {
 	StackTrace   *EventStackTrace
 }
 
+// EventInstanceInfo defines the relationship between events if its provided.
 type EventInstanceInfo struct {
 	InstanceID       uint32
 	ParentInstanceID uint32
 	ParentGUID       windows.GUID
 }
 
+// EventStackTrace describes a call trace of the event occurred.
 type EventStackTrace struct {
 	MatchedID uint64
 	Addresses []uint64
 }
 
-// ExtendedInfo parsers extended info from EVENT_RECORD structure.
+// ExtendedInfo extracts ExtendedEventInfo structure from native buffers of
+// received event record.
+//
+// If no ExtendedEventInfo is available inside an event record function returns
+// the structure with all fields set to nil.
 func (e *Event) ExtendedInfo() ExtendedEventInfo {
+	if e.eventRecord == nil { // Usage outside of event callback.
+		return ExtendedEventInfo{}
+	}
 	if e.eventRecord.EventHeader.Flags&C.EVENT_HEADER_FLAG_EXTENDED_INFO == 0 {
 		return ExtendedEventInfo{}
 	}
@@ -193,33 +246,6 @@ func (e *Event) parseExtendedInfo() ExtendedEventInfo {
 	return extendedData
 }
 
-// Initially we are handed an EVENT_RECORD structure. While this structure technically contains
-// all of the information necessary, TdhGetEventInformation parses the structure and simplifies it
-// so we can more effectively parse and handle the various fields.
-func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
-	var (
-		pInfo      C.PTRACE_EVENT_INFO
-		bufferSize C.ulong
-	)
-	// Retrieve a buffer size.
-	ret := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
-	if windows.Errno(ret) == windows.ERROR_INSUFFICIENT_BUFFER {
-		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.size_t(bufferSize)))
-		if pInfo == nil {
-			return nil, fmt.Errorf("malloc(%v) failed", bufferSize)
-		}
-
-		// Fetch the buffer itself.
-		ret = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
-	}
-
-	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
-		return nil, fmt.Errorf("TdhGetEventInformation failed; %w", status)
-	}
-
-	return pInfo, nil
-}
-
 // propertyParser is used for parsing properties from raw EVENT_RECORD structure.
 type propertyParser struct {
 	record  C.PEVENT_RECORD
@@ -250,36 +276,69 @@ func newPropertyParser(r C.PEVENT_RECORD) (*propertyParser, error) {
 	}, nil
 }
 
+// getEventInformation wraps TdhGetEventInformation. It extracts some kind of
+// simplified event information used by Tdh* family of function.
+//
+// Returned info MUST be freed after use.
+func getEventInformation(pEvent C.PEVENT_RECORD) (C.PTRACE_EVENT_INFO, error) {
+	var (
+		pInfo      C.PTRACE_EVENT_INFO
+		bufferSize C.ulong
+	)
+
+	// Retrieve a buffer size.
+	ret := C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
+	if windows.Errno(ret) == windows.ERROR_INSUFFICIENT_BUFFER {
+		pInfo = C.PTRACE_EVENT_INFO(C.malloc(C.size_t(bufferSize)))
+		if pInfo == nil {
+			return nil, fmt.Errorf("malloc(%v) failed", bufferSize)
+		}
+
+		// Fetch the buffer itself.
+		ret = C.TdhGetEventInformation(pEvent, 0, nil, pInfo, &bufferSize)
+	}
+
+	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
+		return pInfo, fmt.Errorf("TdhGetEventInformation failed; %w", status)
+	}
+
+	return pInfo, nil
+}
+
+// free frees associated PTRACE_EVENT_INFO if any assigned.
 func (p *propertyParser) free() {
 	if p.info != nil {
 		C.free(unsafe.Pointer(p.info))
 	}
 }
 
+// getPropertyName returns a name of the @i-th event property.
 func (p *propertyParser) getPropertyName(i int) string {
 	propertyName := uintptr(C.GetPropertyName(p.info, C.int(i)))
 	length := C.wcslen((C.PWCHAR)(unsafe.Pointer(propertyName)))
 	return createUTF16String(propertyName, int(length))
 }
 
-// getPropertyValue parsers property value. You should call getPropertyValue
-// function in an incrementing index only (i = 0, 1, 2 ..). For the correct
-// parsing property value data pointer should point to the right memory.
-// eventParses controls data pointer with each GetPropertyValue call.
+// getPropertyValue retrieves a value of @i-th property.
+//
+// N.B. getPropertyValue HIGHLY depends not only on @i but also on memory
+// offsets, so check twice calling with non-sequential indexes.
 func (p *propertyParser) getPropertyValue(i int) (interface{}, error) {
-	var value interface{}
-	var err error
-
 	var arraySizeC C.uint
 	ret := C.GetArraySize(p.record, p.info, C.int(i), &arraySizeC)
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
 		return nil, fmt.Errorf("failed to get array size; %w", status)
 	}
+
 	arraySize := int(arraySizeC)
-
 	result := make([]interface{}, arraySize)
-
 	for j := 0; j < arraySize; j++ {
+		var (
+			value interface{}
+			err   error
+		)
+		// Note that we pass same idx to parse function. Actual returned values are controlled
+		// by data pointers offsets.
 		if int(C.PropertyIsStruct(p.info, C.int(i))) == 1 {
 			value, err = p.parseStruct(i)
 		} else {
@@ -297,16 +356,17 @@ func (p *propertyParser) getPropertyValue(i int) (interface{}, error) {
 	return result[0], nil
 }
 
+// parseStruct tries to extract fields of embedded structure at property @i.
 func (p *propertyParser) parseStruct(i int) (map[string]interface{}, error) {
-	startIndex := int(C.GetStartIndex(p.info, C.int(i)))
-	lastIndex := int(C.GetLastIndex(p.info, C.int(i)))
+	startIndex := int(C.GetStructStartIndex(p.info, C.int(i)))
+	lastIndex := int(C.GetStructLastIndex(p.info, C.int(i)))
 
 	structure := make(map[string]interface{}, lastIndex-startIndex)
 	for j := startIndex; j < lastIndex; j++ {
-		value, err := p.getPropertyValue(j)
 		name := p.getPropertyName(j)
+		value, err := p.getPropertyValue(j)
 		if err != nil {
-			return nil, fmt.Errorf("failed parse field %q of complex property type; %s", name, err)
+			return nil, fmt.Errorf("failed parse field %q of complex property type; %w", name, err)
 		}
 		structure[name] = value
 	}
@@ -322,6 +382,8 @@ var (
 	tdhFormatProperty = tdh.NewProc("TdhFormatProperty")
 )
 
+// parseSimpleType wraps TdhFormatProperty to get rendered to string value of
+// @i-th event property.
 func (p *propertyParser) parseSimpleType(i int) (string, error) {
 	mapInfo, err := getMapInfo(p.record, p.info, i)
 	if err != nil {
@@ -375,14 +437,14 @@ retryLoop:
 	return createUTF16String(uintptr(unsafe.Pointer(&formattedData[0])), int(formattedDataSize)), nil
 }
 
-// getMapInfo retrieve the mapping between the @index-th field and the structure it represents.
-// If that mapping exists, function extracts it and returns a buffer it containing, if not,
-// function can legitimately return `nil, nil`.
-func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (unsafe.Pointer, error) {
-	var mapSize C.ulong
-	mapName := C.GetMapName(info, C.int(index))
+// getMapInfo retrieve the mapping between the @i-th field and the structure it represents.
+// If that mapping exists, function extracts it and returns a pointer to the buffer with
+// extracted info, if not function can legitimately return `nil, nil`.
+func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, i int) (unsafe.Pointer, error) {
+	mapName := C.GetMapName(info, C.int(i))
 
 	// Query map info if any exists.
+	var mapSize C.ulong
 	ret := C.TdhGetEventMapInformation(event, mapName, nil, &mapSize)
 	switch status := windows.Errno(ret); status {
 	case windows.ERROR_NOT_FOUND:
@@ -397,7 +459,7 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (uns
 	mapInfo := make([]byte, int(mapSize))
 	ret = C.TdhGetEventMapInformation(
 		event,
-		C.GetMapName(info, C.int(index)),
+		mapName,
 		(C.PEVENT_MAP_INFO)(unsafe.Pointer(&mapInfo[0])),
 		&mapSize)
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
@@ -405,7 +467,7 @@ func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, index int) (uns
 	}
 
 	if len(mapInfo) == 0 {
-		return unsafe.Pointer(nil), nil
+		return nil, nil
 	}
 	return unsafe.Pointer(&mapInfo[0]), nil
 }
@@ -434,7 +496,7 @@ func stampToTime(quadPart C.LONGLONG) time.Time {
 
 // Creates UTF16 string from raw parts.
 //
-// Actually in go with has no way to make a slice from raw parts, ref:
+// Actually in go we have no way to make a slice from raw parts, ref:
 // - https://github.com/golang/go/issues/13656
 // - https://github.com/golang/go/issues/19367
 // So the recommended way is "a fake cast" to the array with maximal len
