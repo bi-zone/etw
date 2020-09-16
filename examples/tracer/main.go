@@ -12,14 +12,16 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/bi-zone/etw"
 	"golang.org/x/sys/windows"
+
+	"github.com/bi-zone/etw"
 )
 
 func main() {
 	var (
 		optSilent = flag.Bool("silent", false, "Stop sending logs to stderr")
 		optHeader = flag.Bool("header", false, "Show event header in output")
+		optID     = flag.Int("id", -1, "Capture only specified ID")
 	)
 	flag.Parse()
 
@@ -43,6 +45,9 @@ func main() {
 	enc.SetIndent("", "  ")
 	cb := func(e *etw.Event) {
 		log.Printf("[DBG] Event %d from %s\n", e.Header.ID, e.Header.TimeStamp)
+		if *optID > 0 && *optID != int(e.Header.ID) {
+			return
+		}
 
 		event := make(map[string]interface{})
 		if *optHeader {
