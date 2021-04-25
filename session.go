@@ -247,37 +247,37 @@ func (s *Session) createETWSession() error {
 	}
 }
 
-// subscribeToProvider wraps EnableTraceEx2 with EVENT_CONTROL_CODE_ENABLE_PROVIDER.
+// subscribeToProvider wraps EnableTraceEx with IsEnabled being 1.
 func (s *Session) subscribeToProvider() error {
 	// https://docs.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session
-	params := C.ENABLE_TRACE_PARAMETERS{
-		Version: 2, // ENABLE_TRACE_PARAMETERS_VERSION_2
-	}
+	var enableProperty C.ULONG
 	for _, p := range s.config.EnableProperties {
-		params.EnableProperty |= C.ULONG(p)
+		enableProperty |= C.ULONG(p)
 	}
 
-	// ULONG WMIAPI EnableTraceEx2(
-	//	TRACEHANDLE              TraceHandle,
+	// ULONG WMIAPI EnableTraceEx(
 	//	LPCGUID                  ProviderId,
-	//	ULONG                    ControlCode,
+	//	LPCGUID                  SourceId,
+	//	TRACEHANDLE              TraceHandle,
+	//	ULONG                    IsEnabled,
 	//	UCHAR                    Level,
 	//	ULONGLONG                MatchAnyKeyword,
 	//	ULONGLONG                MatchAllKeyword,
-	//	ULONG                    Timeout,
-	//	PENABLE_TRACE_PARAMETERS EnableParameters
-	// );
+	//	ULONG                    EnableProperty,
+	//	PEVENT_FILTER_DESCRIPTOR EnableFilterDesc
+	//);
 	//
-	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-enabletraceex2
-	ret := C.EnableTraceEx2(
-		s.hSession,
+	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-enabletraceex
+	ret := C.EnableTraceEx(
 		(*C.GUID)(unsafe.Pointer(&s.guid)),
-		C.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+		nil,
+		s.hSession,
+		1,
 		C.UCHAR(s.config.Level),
 		C.ULONGLONG(s.config.MatchAnyKeyword),
 		C.ULONGLONG(s.config.MatchAllKeyword),
-		0,       // Timeout set to zero to enable the trace asynchronously
-		&params, //nolint:gocritic // TODO: dupSubExpr?? gocritic bug?
+		enableProperty,
+		nil,
 	)
 
 	if status := windows.Errno(ret); status != windows.ERROR_SUCCESS {
@@ -286,22 +286,24 @@ func (s *Session) subscribeToProvider() error {
 	return nil
 }
 
-// unsubscribeFromProvider wraps EnableTraceEx2 with EVENT_CONTROL_CODE_DISABLE_PROVIDER.
+// unsubscribeFromProvider wraps EnableTraceEx with IsEnabled being 0.
 func (s *Session) unsubscribeFromProvider() error {
-	// ULONG WMIAPI EnableTraceEx2(
-	//	TRACEHANDLE              TraceHandle,
+	// ULONG WMIAPI EnableTraceEx(
 	//	LPCGUID                  ProviderId,
-	//	ULONG                    ControlCode,
+	//	LPCGUID                  SourceId,
+	//	TRACEHANDLE              TraceHandle,
+	//	ULONG                    IsEnabled,
 	//	UCHAR                    Level,
 	//	ULONGLONG                MatchAnyKeyword,
 	//	ULONGLONG                MatchAllKeyword,
-	//	ULONG                    Timeout,
-	//	PENABLE_TRACE_PARAMETERS EnableParameters
-	// );
-	ret := C.EnableTraceEx2(
-		s.hSession,
+	//	ULONG                    EnableProperty,
+	//	PEVENT_FILTER_DESCRIPTOR EnableFilterDesc
+	//);
+	ret := C.EnableTraceEx(
 		(*C.GUID)(unsafe.Pointer(&s.guid)),
-		C.EVENT_CONTROL_CODE_DISABLE_PROVIDER,
+		nil,
+		s.hSession,
+		0,
 		0,
 		0,
 		0,
