@@ -429,6 +429,11 @@ retryLoop:
 		case windows.ERROR_SUCCESS:
 			break retryLoop
 		default:
+			if status == windows.ERROR_EVT_INVALID_EVENT_DATA && mapInfo != nil {
+				// Can happen if the MapInfo doesn't match the actual data. Removing it allows us to access at least the non-interpreted data.
+				mapInfo = nil
+				continue
+			}
 			return "", fmt.Errorf("TdhFormatProperty failed; %w", status)
 		}
 	}
