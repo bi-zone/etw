@@ -423,11 +423,23 @@ retryLoop:
 		)
 
 		switch status := windows.Errno(r0); status {
+		case windows.ERROR_SUCCESS:
+			break retryLoop
+
 		case windows.ERROR_INSUFFICIENT_BUFFER:
 			formattedData = make([]byte, int(formattedDataSize))
 			continue
-		case windows.ERROR_SUCCESS:
-			break retryLoop
+
+		case windows.ERROR_EVT_INVALID_EVENT_DATA:
+			// Can happen if the MapInfo doesn't match the actual data, e.g pure ETW provider
+			// works with the outdated WEL manifest. Discarding MapInfo allows us to access
+			// at least the non-interpreted data.
+			if mapInfo != nil {
+				mapInfo = nil
+				continue
+			}
+			fallthrough // Can't fix. Error.
+
 		default:
 			return "", fmt.Errorf("TdhFormatProperty failed; %w", status)
 		}
@@ -439,7 +451,7 @@ retryLoop:
 
 // getMapInfo retrieve the mapping between the @i-th field and the structure it represents.
 // If that mapping exists, function extracts it and returns a pointer to the buffer with
-// extracted info, if not function can legitimately return `nil, nil`.
+// extracted info. If no mapping defined, function can legitimately return `nil, nil`.
 func getMapInfo(event C.PEVENT_RECORD, info C.PTRACE_EVENT_INFO, i int) (unsafe.Pointer, error) {
 	mapName := C.GetMapName(info, C.int(i))
 
