@@ -20,13 +20,14 @@ import (
  */
 import "C"
 
+//nolint:gochecknoglobals
 var (
 	enumerateProviders = tdh.NewProc("TdhEnumerateProviders")
 )
 
 type Provider struct {
 	Name string
-	Guid windows.GUID
+	GUID windows.GUID
 }
 
 func LookupProvider(name string) (Provider, error) {
@@ -44,8 +45,8 @@ func LookupProvider(name string) (Provider, error) {
 
 func ListProviders() ([]Provider, error) {
 	var requiredSize uintptr
-	enumerateProviders.Call(0, uintptr(unsafe.Pointer(&requiredSize)))
-	status := windows.ERROR_INSUFFICIENT_BUFFER
+	plainStatus, _, _ := enumerateProviders.Call(0, uintptr(unsafe.Pointer(&requiredSize)))
+	status := windows.Errno(plainStatus)
 	var buffer []byte
 	for status == windows.ERROR_INSUFFICIENT_BUFFER {
 		buffer = make([]byte, requiredSize)
@@ -57,14 +58,14 @@ func ListProviders() ([]Provider, error) {
 	if status != windows.ERROR_SUCCESS {
 		return nil, status
 	}
-	var parsedProviders []Provider
 	enumerationInfo := (*C.PROVIDER_ENUMERATION_INFO)(unsafe.Pointer(&buffer[0]))
 	// Recast provider info array to escape golang boundary checks
 	providerInfoArray := (*[1 << 25]C.TRACE_PROVIDER_INFO)(unsafe.Pointer(&enumerationInfo.TraceProviderInfoArray))
+	var parsedProviders = make([]Provider, 0, enumerationInfo.NumberOfProviders)
 	for _, providerInfo := range providerInfoArray[:enumerationInfo.NumberOfProviders] {
 		parsedProviders = append(parsedProviders, Provider{
 			Name: parseUnicodeStringAtOffset(buffer, int(providerInfo.ProviderNameOffset)),
-			Guid: windowsGUIDToGo(providerInfo.ProviderGuid),
+			GUID: windowsGUIDToGo(providerInfo.ProviderGuid),
 		})
 	}
 	return parsedProviders, nil
