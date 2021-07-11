@@ -344,10 +344,9 @@ func (p *propertyParser) getPropertyValue(i int) (interface{}, error) {
 		} else {
 			value, err = p.parseSimpleType(i)
 		}
-		if err != nil {
-			return nil, err
+		if err == nil {
+			result[j] = value
 		}
-		result[j] = value
 	}
 
 	if int(C.PropertyIsArray(p.info, C.int(i))) == 1 {
