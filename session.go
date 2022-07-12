@@ -54,7 +54,7 @@ type Session struct {
 	guid     windows.GUID
 	config   SessionOptions
 	callback EventCallback
-
+    contextKey *uint32
 	etwSessionName []uint16
 	hSession       C.TRACEHANDLE
 	propertiesBuf  []byte
@@ -119,11 +119,11 @@ func (s *Session) Process(cb EventCallback) error {
 		return fmt.Errorf("failed to subscribe to provider; %w", err)
 	}
 
-	cgoKey := newCallbackKey(s)
-	defer freeCallbackKey(cgoKey)
+	s.contextKey = newCallbackKey(s)
+	defer freeCallbackKey(*s.contextKey)
 
 	// Will block here until being closed.
-	if err := s.processEvents(cgoKey); err != nil {
+	if err := s.processEvents(s.contextKey); err != nil {
 		return fmt.Errorf("error processing events; %w", err)
 	}
 	return nil
@@ -316,11 +316,11 @@ func (s *Session) unsubscribeFromProvider() error {
 }
 
 // processEvents subscribes to the actual provider events and starts its processing.
-func (s *Session) processEvents(callbackContextKey uintptr) error {
+func (s *Session) processEvents(callbackContextKey *uint32) error {
 	// Ref: https://docs.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-opentracew
 	traceHandle := C.OpenTraceHelper(
 		(C.LPWSTR)(unsafe.Pointer(&s.etwSessionName[0])),
-		(C.PVOID)(callbackContextKey),
+		(C.PVOID)(uintptr(unsafe.Pointer(callbackContextKey))),
 	)
 	if C.INVALID_PROCESSTRACE_HANDLE == traceHandle {
 		return fmt.Errorf("OpenTraceW failed; %w", windows.GetLastError())
@@ -396,19 +396,18 @@ func randomName() string {
 //nolint:gochecknoglobals
 var (
 	sessions       sync.Map
-	sessionCounter uintptr
+	sessionCounter uint32
 )
 
 // newCallbackKey stores a @ptr inside a global storage returning its' key.
 // After use the key should be freed using `freeCallbackKey`.
-func newCallbackKey(ptr *Session) uintptr {
-	key := atomic.AddUintptr(&sessionCounter, 1)
+func newCallbackKey(ptr *Session) *uint32 {
+	key := atomic.AddUint32(&sessionCounter, 1)
 	sessions.Store(key, ptr)
-
-	return key
+	return &key
 }
 
-func freeCallbackKey(key uintptr) {
+func freeCallbackKey(key uint32) {
 	sessions.Delete(key)
 }
 
@@ -419,7 +418,7 @@ func freeCallbackKey(key uintptr) {
 //
 //export handleEvent
 func handleEvent(eventRecord C.PEVENT_RECORD) {
-	key := uintptr(eventRecord.UserContext)
+	key := *(*uint32)(unsafe.Pointer(eventRecord.UserContext))
 	targetSession, ok := sessions.Load(key)
 	if !ok {
 		return
