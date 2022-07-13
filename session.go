@@ -54,7 +54,7 @@ type Session struct {
 	guid     windows.GUID
 	config   SessionOptions
 	callback EventCallback
-    contextKey *uint32
+        contextKey *uint32
 	etwSessionName []uint16
 	hSession       C.TRACEHANDLE
 	propertiesBuf  []byte

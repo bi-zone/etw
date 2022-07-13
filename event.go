@@ -513,6 +513,5 @@ func createUTF16String(ptr uintptr, len int) string {
 		return ""
 	}
 	bytes := unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len)
-	ts := windows.UTF16ToString(bytes)
-      return ts
+	return windows.UTF16ToString(bytes)
 }
