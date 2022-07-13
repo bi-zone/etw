@@ -1,4 +1,4 @@
-module github.com/bi-zone/etw
+module github.com/lcostantino/etw
 
 go 1.18
 
