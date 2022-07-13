@@ -507,17 +507,12 @@ func stampToTime(quadPart C.LONGLONG) time.Time {
 }
 
 // Creates UTF16 string from raw parts.
-//
-// Actually in go we have no way to make a slice from raw parts, ref:
-// - https://github.com/golang/go/issues/13656
-// - https://github.com/golang/go/issues/19367
-// So the recommended way is "a fake cast" to the array with maximal len
-// with a following slicing.
 // Ref: https://github.com/golang/go/wiki/cgo#turning-c-arrays-into-go-slices
 func createUTF16String(ptr uintptr, len int) string {
 	if len == 0 {
 		return ""
 	}
-	bytes := unsafe.Slice(unsafe.Pointer(ptr), len)
-	return windows.UTF16ToString(bytes)
+	bytes := unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len)
+	ts := windows.UTF16ToString(bytes)
+      return ts
 }
